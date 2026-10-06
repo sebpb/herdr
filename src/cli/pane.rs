@@ -892,6 +892,7 @@ fn parse_pane_move_args(args: &[String]) -> Result<PaneMoveParams, String> {
         PaneMoveDestination::NewTab {
             workspace_id,
             label,
+            insert_index: None,
         }
     } else {
         if split.is_some() || target_pane_id.is_some() || workspace_id.is_some() || new_tab {

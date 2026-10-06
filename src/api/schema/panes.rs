@@ -96,6 +96,8 @@ pub enum PaneMoveDestination {
         workspace_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        insert_index: Option<usize>,
     },
     NewWorkspace {
         #[serde(default, skip_serializing_if = "Option::is_none")]

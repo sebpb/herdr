@@ -56,6 +56,8 @@ pub(super) fn render_agent_panel(
     snapshot: &ClientShellSnapshot,
     config: &ClientShellConfig,
     agent_scroll: &mut usize,
+    dragged_pane_id: Option<&str>,
+    drop_indicator_row: Option<u16>,
     hits: &mut ShellHitMap,
 ) {
     if !render_agent_panel_header(
@@ -93,13 +95,29 @@ pub(super) fn render_agent_panel(
             AgentPanelEntry::Agent(row) => row.rows.len(),
         },
         |buffer, rect, entry, hits| match entry {
-            AgentPanelEntry::Header { label, focused } => {
+            AgentPanelEntry::Header {
+                workspace_id,
+                label,
+                focused,
+            } => {
+                hits.agent_entries.push(AgentEntryHit {
+                    rect,
+                    workspace_id: workspace_id.clone(),
+                    pane_id: None,
+                });
                 render_space_header(buffer, rect, label, *focused, config);
             }
             AgentPanelEntry::Agent(row) => {
                 hits.agents.push((rect, row.pane_id.clone()));
                 if grouped {
-                    if row.focused {
+                    hits.agent_entries.push(AgentEntryHit {
+                        rect,
+                        workspace_id: row.workspace_id.clone(),
+                        pane_id: Some(row.pane_id.clone()),
+                    });
+                    if dragged_pane_id == Some(row.pane_id.as_str()) {
+                        buffer.set_style(rect, Style::default().bg(config.palette.surface1));
+                    } else if row.focused {
                         buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
                     }
                     let nested = Rect::new(
@@ -115,12 +133,28 @@ pub(super) fn render_agent_panel(
             }
         },
     );
+    if let Some(row) = drop_indicator_row
+        .filter(|row| *row >= hits.agent_body.y && *row < hits.agent_body.bottom())
+    {
+        put_text(
+            buffer,
+            hits.agent_body.x,
+            row,
+            hits.agent_body.width,
+            &"─".repeat(hits.agent_body.width as usize),
+            Style::default().fg(config.palette.accent),
+        );
+    }
 }
 
 const GROUP_INDENT: u16 = 2;
 
 enum AgentPanelEntry {
-    Header { label: String, focused: bool },
+    Header {
+        workspace_id: String,
+        label: String,
+        focused: bool,
+    },
     Agent(AgentRow),
 }
 
@@ -138,6 +172,7 @@ fn grouped_agent_entries(
                 .iter()
                 .find(|workspace| workspace.workspace_id == row.workspace_id);
             entries.push(AgentPanelEntry::Header {
+                workspace_id: row.workspace_id.clone(),
                 label: workspace.map_or_else(String::new, |workspace| workspace.label.clone()),
                 focused: workspace.is_some_and(|workspace| workspace.focused),
             });

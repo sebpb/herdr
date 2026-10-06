@@ -2713,6 +2713,14 @@
             },
             {
               "properties": {
+                "insert_index": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
                 "label": {
                   "type": [
                     "string",

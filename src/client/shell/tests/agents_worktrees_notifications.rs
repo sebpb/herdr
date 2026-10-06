@@ -571,18 +571,35 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
     assert_eq!(compact.cells[row_start].bg, compact.cells[row_start + 2].bg);
 }
 
-#[test]
-fn agent_sidebar_groups_agents_under_space_headers() {
+fn grouped_agent_state() -> ClientShellState {
     let mut projected = snapshot();
     let mut second_workspace = projected.workspaces[0].clone();
     second_workspace.workspace_id = "ws_2".into();
     second_workspace.label = "other-space".into();
     second_workspace.focused = false;
     projected.workspaces.push(second_workspace);
-    let agent = |pane_id: &str, workspace_id: &str, name: &str| ClientShellAgent {
+    let tab = |tab_id: &str, workspace_id: &str, number: usize| {
+        let mut tab = projected.tabs[0].clone();
+        tab.tab_id = tab_id.into();
+        tab.workspace_id = workspace_id.into();
+        tab.number = number;
+        tab.label = format!("chat {number}");
+        tab.custom_label = true;
+        tab.focused = false;
+        tab
+    };
+    let pane = |pane_id: &str, workspace_id: &str, tab_id: &str| {
+        let mut pane = projected.panes[0].clone();
+        pane.pane_id = pane_id.into();
+        pane.workspace_id = workspace_id.into();
+        pane.tab_id = tab_id.into();
+        pane.focused = false;
+        pane
+    };
+    let agent = |pane_id: &str, workspace_id: &str, tab_id: &str, name: &str| ClientShellAgent {
         pane_id: pane_id.into(),
         workspace_id: workspace_id.into(),
-        tab_id: "tab_1".into(),
+        tab_id: tab_id.into(),
         name: Some(name.into()),
         display_agent: None,
         agent: Some("pi".into()),
@@ -595,10 +612,20 @@ fn agent_sidebar_groups_agents_under_space_headers() {
         tokens: Vec::new(),
         focused: false,
     };
+    projected.tabs = vec![
+        tab("tab_1", "ws_1", 1),
+        tab("tab_2", "ws_1", 2),
+        tab("tab_3", "ws_2", 1),
+    ];
+    projected.panes = vec![
+        pane("pane_1", "ws_1", "tab_1"),
+        pane("pane_2", "ws_1", "tab_2"),
+        pane("pane_3", "ws_2", "tab_3"),
+    ];
     projected.agents = vec![
-        agent("pane_1", "ws_1", "alpha"),
-        agent("pane_2", "ws_1", "beta"),
-        agent("pane_3", "ws_2", "gamma"),
+        agent("pane_1", "ws_1", "tab_1", "alpha"),
+        agent("pane_2", "ws_1", "tab_2", "beta"),
+        agent("pane_3", "ws_2", "tab_3", "gamma"),
     ];
     let mut config = Config::default();
     config.ui.sidebar.agents.rows = vec![vec![
@@ -609,6 +636,43 @@ fn agent_sidebar_groups_agents_under_space_headers() {
     let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
     state.set_snapshot(Box::new(projected));
     state.set_pane_surface(surface());
+    state
+}
+
+fn agent_row_rect(state: &ClientShellState, pane_id: &str) -> Rect {
+    state
+        .hits
+        .agents
+        .iter()
+        .find(|(_, candidate)| candidate == pane_id)
+        .map(|(rect, _)| *rect)
+        .unwrap_or_else(|| panic!("missing agent row {pane_id}"))
+}
+
+fn drag_agent(state: &mut ClientShellState, from: Rect, to_row: u16) -> Vec<ClientShellAction> {
+    let mouse = |kind, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: from.x + 2,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    state.handle_raw_events(vec![
+        mouse(MouseEventKind::Down(MouseButton::Left), from.y),
+        mouse(MouseEventKind::Drag(MouseButton::Left), to_row),
+    ]);
+    state
+        .compose(106, 30)
+        .expect("dragging agent sidebar frame");
+    state
+        .handle_raw_events(vec![mouse(MouseEventKind::Up(MouseButton::Left), to_row)])
+        .actions
+}
+
+#[test]
+fn agent_sidebar_groups_agents_under_space_headers() {
+    let mut state = grouped_agent_state();
 
     let frame = state.compose(106, 30).expect("grouped agent sidebar frame");
     let lines = frame
@@ -647,6 +711,88 @@ fn agent_sidebar_groups_agents_under_space_headers() {
         agent_x > header_x,
         "agents should be nested under the header"
     );
+}
+
+#[test]
+fn grouped_agent_click_without_drag_focuses_pane() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    let beta = agent_row_rect(&state, "pane_2");
+
+    let actions = drag_agent(&mut state, beta, beta.y);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("agent click should focus through endpoint API: {actions:?}");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::PaneFocus(target) if target.pane_id == "pane_2"
+    ));
+}
+
+#[test]
+fn grouped_agent_drag_within_space_moves_its_tab() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    let alpha = agent_row_rect(&state, "pane_1");
+    let beta = agent_row_rect(&state, "pane_2");
+
+    let actions = drag_agent(&mut state, beta, alpha.y);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("agent drop should move through endpoint API: {actions:?}");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::TabMove(params)
+            if params.tab_id == "tab_2" && params.insert_index == 0
+    ));
+}
+
+#[test]
+fn grouped_agent_drag_across_spaces_moves_pane_to_new_tab() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    let alpha = agent_row_rect(&state, "pane_1");
+    let gamma = agent_row_rect(&state, "pane_3");
+
+    let actions = drag_agent(&mut state, alpha, gamma.y);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("agent drop should move through endpoint API: {actions:?}");
+    };
+    let crate::api::schema::Method::PaneMove(params) = &request.method else {
+        panic!("expected pane move, got {:?}", request.method);
+    };
+    assert_eq!(params.pane_id, "pane_1");
+    assert!(!params.focus);
+    assert_eq!(
+        params.destination,
+        crate::api::schema::PaneMoveDestination::NewTab {
+            workspace_id: Some("ws_2".into()),
+            label: Some("chat 1".into()),
+            insert_index: Some(0),
+        }
+    );
+}
+
+#[test]
+fn grouped_agent_drag_to_end_of_space_appends_after_its_agents() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    let alpha = agent_row_rect(&state, "pane_1");
+    let gamma = agent_row_rect(&state, "pane_3");
+
+    let actions = drag_agent(&mut state, alpha, gamma.y - 1);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("agent drop should move through endpoint API: {actions:?}");
+    };
+    assert!(matches!(
+        &request.method,
+        crate::api::schema::Method::TabMove(params)
+            if params.tab_id == "tab_1" && params.insert_index == 2
+    ));
 }
 
 #[test]

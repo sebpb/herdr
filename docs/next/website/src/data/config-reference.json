@@ -1061,6 +1061,12 @@
           "description": "Blank terminal rows between expanded Agent sidebar entries. Set to 1 to restore the previous spacing."
         },
         {
+          "key": "ui.sidebar.agents.group_by_space",
+          "type": "boolean",
+          "default": "false",
+          "description": "When ui.agent_panel_sort is \"spaces\", show a header row for each space with its agents nested under it. Drag an agent to reorder it or move it to another space."
+        },
+        {
           "key": "ui.sidebar.agents.rows",
           "type": "list of token rows",
           "default": "[[\"state_icon\", \"machine\", \"workspace\", \"tab\"], [\"agent\"]]",

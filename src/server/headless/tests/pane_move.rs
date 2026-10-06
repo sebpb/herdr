@@ -63,6 +63,7 @@ async fn public_pane_move_focus_follows_the_moved_pane() {
             destination: PaneMoveDestination::NewTab {
                 workspace_id: Some(destination_id.clone()),
                 label: None,
+                insert_index: None,
             },
             focus: true,
         },
