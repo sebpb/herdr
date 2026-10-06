@@ -796,6 +796,41 @@ fn grouped_agent_drag_to_end_of_space_appends_after_its_agents() {
 }
 
 #[test]
+fn grouped_agent_right_click_opens_tab_and_space_menus() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    let beta = agent_row_rect(&state, "pane_2");
+    let gamma = agent_row_rect(&state, "pane_3");
+    let right_click = |row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column: beta.x + 2,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+
+    state.handle_raw_events(vec![right_click(beta.y)]);
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Tab { tab_id, .. },
+            ..
+        })) if tab_id == "tab_2"
+    ));
+
+    state.overlay = None;
+    state.handle_raw_events(vec![right_click(gamma.y - 1)]);
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Workspace { workspace_id, .. },
+            ..
+        })) if workspace_id == "ws_2"
+    ));
+}
+
+#[test]
 fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let mut projected = snapshot();
     projected.tabs[0].label = "second".into();
