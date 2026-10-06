@@ -12,6 +12,7 @@ use super::*;
 
 pub(super) struct AgentRow {
     pub(super) pane_id: String,
+    pub(super) workspace_id: String,
     pub(super) status: crate::api::schema::AgentStatus,
     pub(super) focused: bool,
     pub(super) rows: Vec<Vec<crate::ui::ResolvedToken>>,
@@ -68,10 +69,18 @@ pub(super) fn render_agent_panel(
     }
 
     let rows = agent_rows(snapshot, config, None);
+    let grouped = config.agents.group_by_space
+        && config.agent_panel_sort == crate::config::AgentPanelSortConfig::Spaces
+        && snapshot.agent_view_label.is_none();
+    let entries = if grouped {
+        grouped_agent_entries(snapshot, rows)
+    } else {
+        rows.into_iter().map(AgentPanelEntry::Agent).collect()
+    };
     render_agent_list(
         buffer,
         area,
-        &rows,
+        &entries,
         snapshot
             .agent_view_label
             .as_ref()
@@ -79,11 +88,87 @@ pub(super) fn render_agent_panel(
         config,
         agent_scroll,
         hits,
-        |row| row.rows.len(),
-        |buffer, rect, row, hits| {
-            hits.agents.push((rect, row.pane_id.clone()));
-            render_agent_row(buffer, rect, row, config);
+        |entry| match entry {
+            AgentPanelEntry::Header { .. } => 1,
+            AgentPanelEntry::Agent(row) => row.rows.len(),
         },
+        |buffer, rect, entry, hits| match entry {
+            AgentPanelEntry::Header { label, focused } => {
+                render_space_header(buffer, rect, label, *focused, config);
+            }
+            AgentPanelEntry::Agent(row) => {
+                hits.agents.push((rect, row.pane_id.clone()));
+                if grouped {
+                    if row.focused {
+                        buffer.set_style(rect, Style::default().bg(config.palette.active_row_bg));
+                    }
+                    let nested = Rect::new(
+                        rect.x.saturating_add(GROUP_INDENT),
+                        rect.y,
+                        rect.width.saturating_sub(GROUP_INDENT),
+                        rect.height,
+                    );
+                    render_agent_row(buffer, nested, row, config);
+                } else {
+                    render_agent_row(buffer, rect, row, config);
+                }
+            }
+        },
+    );
+}
+
+const GROUP_INDENT: u16 = 2;
+
+enum AgentPanelEntry {
+    Header { label: String, focused: bool },
+    Agent(AgentRow),
+}
+
+/// Inserts a header before each run of agents that share a space.
+fn grouped_agent_entries(
+    snapshot: &ClientShellSnapshot,
+    rows: Vec<AgentRow>,
+) -> Vec<AgentPanelEntry> {
+    let mut entries = Vec::with_capacity(rows.len() * 2);
+    let mut current: Option<String> = None;
+    for row in rows {
+        if current.as_deref() != Some(row.workspace_id.as_str()) {
+            let workspace = snapshot
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.workspace_id == row.workspace_id);
+            entries.push(AgentPanelEntry::Header {
+                label: workspace.map_or_else(String::new, |workspace| workspace.label.clone()),
+                focused: workspace.is_some_and(|workspace| workspace.focused),
+            });
+            current = Some(row.workspace_id.clone());
+        }
+        entries.push(AgentPanelEntry::Agent(row));
+    }
+    entries
+}
+
+fn render_space_header(
+    buffer: &mut Buffer,
+    rect: Rect,
+    label: &str,
+    focused: bool,
+    config: &ClientShellConfig,
+) {
+    let style = Style::default()
+        .fg(if focused {
+            config.palette.text
+        } else {
+            config.palette.overlay1
+        })
+        .add_modifier(Modifier::BOLD);
+    put_text(
+        buffer,
+        rect.x.saturating_add(1),
+        rect.y,
+        rect.width.saturating_sub(1),
+        &format!("▾ {label}"),
+        style,
     );
 }
 
@@ -312,6 +397,7 @@ pub(super) fn agent_row(
     );
     Some(AgentRow {
         pane_id: agent.pane_id.clone(),
+        workspace_id: agent.workspace_id.clone(),
         status: agent.agent_status,
         focused: agent.focused,
         rows,

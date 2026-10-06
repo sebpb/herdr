@@ -572,6 +572,81 @@ fn agent_sidebar_honors_priority_symbols_tokens_and_stable_hits() {
 }
 
 #[test]
+fn agent_sidebar_groups_agents_under_space_headers() {
+    let mut projected = snapshot();
+    let mut second_workspace = projected.workspaces[0].clone();
+    second_workspace.workspace_id = "ws_2".into();
+    second_workspace.label = "other-space".into();
+    second_workspace.focused = false;
+    projected.workspaces.push(second_workspace);
+    let agent = |pane_id: &str, workspace_id: &str, name: &str| ClientShellAgent {
+        pane_id: pane_id.into(),
+        workspace_id: workspace_id.into(),
+        tab_id: "tab_1".into(),
+        name: Some(name.into()),
+        display_agent: None,
+        agent: Some("pi".into()),
+        title: None,
+        terminal_title: None,
+        terminal_title_stripped: None,
+        agent_status: AgentStatus::Idle,
+        state_change_seq: 1,
+        state_labels: Vec::new(),
+        tokens: Vec::new(),
+        focused: false,
+    };
+    projected.agents = vec![
+        agent("pane_1", "ws_1", "alpha"),
+        agent("pane_2", "ws_1", "beta"),
+        agent("pane_3", "ws_2", "gamma"),
+    ];
+    let mut config = Config::default();
+    config.ui.sidebar.agents.rows = vec![vec![
+        crate::config::AgentSidebarToken::StateIcon,
+        crate::config::AgentSidebarToken::Agent,
+    ]];
+    config.ui.sidebar.agents.group_by_space = true;
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    state.set_snapshot(Box::new(projected));
+    state.set_pane_surface(surface());
+
+    let frame = state.compose(106, 30).expect("grouped agent sidebar frame");
+    let lines = frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>();
+    let line_of = |needle: &str| {
+        lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("missing {needle}: {}", lines.join("\n")))
+    };
+    let first_header = line_of("▾ client-shell");
+    let second_header = line_of("▾ other-space");
+    assert_eq!(line_of("alpha"), first_header + 1);
+    assert_eq!(line_of("beta"), first_header + 2);
+    assert_eq!(second_header, first_header + 3);
+    assert_eq!(line_of("gamma"), second_header + 1);
+    assert_eq!(
+        state
+            .hits
+            .agents
+            .iter()
+            .map(|(_, pane_id)| pane_id.as_str())
+            .collect::<Vec<_>>(),
+        ["pane_1", "pane_2", "pane_3"]
+    );
+    let header_x = lines[first_header].find('▾').expect("header marker");
+    let agent_x = lines[first_header + 1].find("alpha").expect("agent label");
+    assert!(agent_x > header_x, "agents should be nested under the header");
+}
+
+#[test]
 fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let mut projected = snapshot();
     projected.tabs[0].label = "second".into();

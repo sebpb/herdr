@@ -427,6 +427,8 @@ pub struct AgentsSidebarConfig {
     #[serde(default, deserialize_with = "deserialize_rows_by_agent")]
     pub rows_by_agent: BTreeMap<String, AgentSidebarRows>,
     pub row_gap: u16,
+    /// Show a header row per space and nest its agents under it when sorted by space.
+    pub group_by_space: bool,
 }
 
 impl AgentsSidebarConfig {
@@ -451,6 +453,7 @@ impl Default for AgentsSidebarConfig {
             ],
             rows_by_agent: BTreeMap::new(),
             row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+            group_by_space: false,
         }
     }
 }
