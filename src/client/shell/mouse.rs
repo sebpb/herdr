@@ -584,6 +584,117 @@ impl ClientShellState {
             .map(|(_, target)| target)
     }
 
+    fn agent_drop_target_at(&self, point: (u16, u16)) -> Option<AgentDropTarget> {
+        let body = self.hits.agent_body;
+        if body.height == 0
+            || point.0 < body.x
+            || point.0 >= body.right()
+            || point.1 < body.y.saturating_sub(1)
+            || point.1 > body.bottom()
+        {
+            return None;
+        }
+        let snapshot = self.snapshot.as_deref()?;
+        let order = render::ordered_agent_pane_ids(snapshot, self.config.agent_panel_sort);
+        let workspace_of = |pane_id: &str| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane_id)
+                .map(|agent| agent.workspace_id.as_str())
+        };
+        self.hits
+            .agent_entries
+            .iter()
+            .filter(|hit| hit.rect.bottom() < body.bottom())
+            .map(|hit| {
+                let next = match hit.pane_id.as_deref() {
+                    Some(pane_id) => order
+                        .iter()
+                        .skip_while(|candidate| candidate.as_str() != pane_id)
+                        .nth(1),
+                    None => order.iter().find(|candidate| {
+                        workspace_of(candidate) == Some(hit.workspace_id.as_str())
+                    }),
+                };
+                AgentDropTarget {
+                    workspace_id: hit.workspace_id.clone(),
+                    before_pane_id: next
+                        .filter(|pane_id| workspace_of(pane_id) == Some(hit.workspace_id.as_str()))
+                        .cloned(),
+                    row: hit.rect.bottom(),
+                }
+            })
+            .enumerate()
+            .min_by_key(|(index, target)| (point.1.abs_diff(target.row), *index))
+            .map(|(_, target)| target)
+    }
+
+    fn agent_move_method(
+        &self,
+        pane_id: &str,
+        target: &AgentDropTarget,
+    ) -> Option<crate::api::schema::Method> {
+        if target.before_pane_id.as_deref() == Some(pane_id) {
+            return None;
+        }
+        let snapshot = self.snapshot.as_deref()?;
+        let agent_tab_id = |pane_id: &str| {
+            snapshot
+                .agents
+                .iter()
+                .find(|agent| agent.pane_id == pane_id)
+                .map(|agent| agent.tab_id.as_str())
+        };
+        let source_tab = snapshot
+            .tabs
+            .iter()
+            .find(|tab| Some(tab.tab_id.as_str()) == agent_tab_id(pane_id))?;
+        let tabs = snapshot
+            .tabs
+            .iter()
+            .filter(|tab| tab.workspace_id == target.workspace_id)
+            .collect::<Vec<_>>();
+        let tab_position = |tab_id: Option<&str>| {
+            tabs.iter()
+                .position(|tab| Some(tab.tab_id.as_str()) == tab_id)
+        };
+        let insert_index = match target.before_pane_id.as_deref() {
+            Some(before) => tab_position(agent_tab_id(before))?,
+            None => render::ordered_agent_pane_ids(snapshot, self.config.agent_panel_sort)
+                .iter()
+                .filter_map(|candidate| tab_position(agent_tab_id(candidate)))
+                .max()
+                .map_or(tabs.len(), |index| index + 1),
+        };
+        let single_pane = snapshot
+            .panes
+            .iter()
+            .filter(|pane| pane.tab_id == source_tab.tab_id)
+            .count()
+            == 1;
+        if single_pane && source_tab.workspace_id == target.workspace_id {
+            return Some(crate::api::schema::Method::TabMove(
+                crate::api::schema::TabMoveParams {
+                    tab_id: source_tab.tab_id.clone(),
+                    insert_index,
+                },
+            ));
+        }
+        Some(crate::api::schema::Method::PaneMove(
+            crate::api::schema::PaneMoveParams {
+                pane_id: pane_id.to_string(),
+                destination: crate::api::schema::PaneMoveDestination::NewTab {
+                    workspace_id: Some(target.workspace_id.clone()),
+                    label: (single_pane && source_tab.custom_label)
+                        .then(|| source_tab.label.clone()),
+                    insert_index: Some(insert_index),
+                },
+                focus: false,
+            },
+        ))
+    }
+
     fn workspace_move_method(
         &self,
         source_workspace_id: &str,
@@ -1215,6 +1326,17 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                Some(ClientChromeDrag::Agent { .. }) => {
+                    let target = self.agent_drop_target_at(point);
+                    if let Some(ClientChromeDrag::Agent {
+                        target: current, ..
+                    }) = self.chrome_drag.as_mut()
+                    {
+                        *current = target;
+                    }
+                    outcome.repaint = true;
+                    return;
+                }
                 None => {}
             }
             if let Some(press) = self.workspace_press.as_ref() {
@@ -1254,11 +1376,28 @@ impl ClientShellState {
                 }
                 return;
             }
+            if let Some(press) = self.agent_press.as_ref() {
+                let delta = mouse
+                    .column
+                    .abs_diff(press.start_column)
+                    .max(mouse.row.abs_diff(press.start_row));
+                if delta >= 1 {
+                    if let Some(target) = self.agent_drop_target_at(point) {
+                        self.chrome_drag = Some(ClientChromeDrag::Agent {
+                            pane_id: press.pane_id.clone(),
+                            target: Some(target),
+                        });
+                        outcome.repaint = true;
+                    }
+                }
+                return;
+            }
         }
         if mouse.kind == MouseEventKind::Up(MouseButton::Left) {
             if let Some(drag) = self.chrome_drag.take() {
                 self.workspace_press = None;
                 self.tab_press = None;
+                self.agent_press = None;
                 match drag {
                     ClientChromeDrag::Tab {
                         tab_id,
@@ -1304,6 +1443,14 @@ impl ClientShellState {
                             ) {
                                 self.push_endpoint_method(method, outcome);
                             }
+                        }
+                        outcome.repaint = true;
+                    }
+                    ClientChromeDrag::Agent { pane_id, target } => {
+                        if let Some(method) =
+                            target.and_then(|target| self.agent_move_method(&pane_id, &target))
+                        {
+                            self.push_endpoint_method(method, outcome);
                         }
                         outcome.repaint = true;
                     }
@@ -1377,6 +1524,15 @@ impl ClientShellState {
                 self.push_endpoint_method(
                     crate::api::schema::Method::TabFocus(crate::api::schema::TabTarget {
                         tab_id: press.tab_id,
+                    }),
+                    outcome,
+                );
+                return;
+            }
+            if let Some(press) = self.agent_press.take() {
+                self.push_endpoint_method(
+                    crate::api::schema::Method::PaneFocus(crate::api::schema::PaneTarget {
+                        pane_id: press.pane_id,
                     }),
                     outcome,
                 );
@@ -1939,6 +2095,7 @@ impl ClientShellState {
                 let previous_pane_click = self.last_pane_click.take();
                 self.workspace_press = None;
                 self.tab_press = None;
+                self.agent_press = None;
                 self.chrome_drag = None;
                 // The toggle is painted over the agent scrollbar's last cell.
                 if super::contains(self.hits.sidebar_toggle, point) {
@@ -2142,6 +2299,26 @@ impl ClientShellState {
                     return;
                 }
                 if self.handle_endpoint_agent_click(point, outcome) {
+                    return;
+                }
+                let agent_press = self
+                    .config
+                    .mouse_capture
+                    .then(|| {
+                        self.hits
+                            .agent_entries
+                            .iter()
+                            .find(|hit| super::contains(hit.rect, point))
+                            .and_then(|hit| hit.pane_id.clone())
+                            .map(|pane_id| ClientAgentPress {
+                                pane_id,
+                                start_column: mouse.column,
+                                start_row: mouse.row,
+                            })
+                    })
+                    .flatten();
+                if let Some(agent_press) = agent_press {
+                    self.agent_press = Some(agent_press);
                     return;
                 }
                 let agent_pane_id = self

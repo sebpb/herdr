@@ -77,6 +77,8 @@ impl ClientShellState {
             reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
             dragged_workspace_id: None,
             workspace_drop_indicator_row: None,
+            dragged_agent_pane_id: None,
+            agent_drop_indicator_row: None,
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -204,6 +206,13 @@ impl ClientShellState {
             ),
             _ => (None, None),
         };
+        let (dragged_agent_pane_id, agent_drop_indicator_row) = match &self.chrome_drag {
+            Some(ClientChromeDrag::Agent { pane_id, target }) => (
+                Some(pane_id.as_str()),
+                target.as_ref().map(|target| target.row),
+            ),
+            _ => (None, None),
+        };
         let mut buffer = Buffer::empty(Rect::new(0, 0, cols, rows));
         self.hits = render::render_shell(
             &mut buffer,
@@ -233,6 +242,8 @@ impl ClientShellState {
                 reveal_navigation_workspace: &mut self.reveal_navigation_workspace,
                 dragged_workspace_id,
                 workspace_drop_indicator_row,
+                dragged_agent_pane_id,
+                agent_drop_indicator_row,
             },
         );
         self.hits.panes = surface

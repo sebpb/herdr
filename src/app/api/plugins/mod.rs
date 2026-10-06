@@ -3752,6 +3752,7 @@ command = ["sh", "-c", "echo ok"]
                 destination: crate::api::schema::PaneMoveDestination::NewTab {
                     workspace_id: None,
                     label: Some("moved".into()),
+                    insert_index: None,
                 },
                 focus: true,
             }),

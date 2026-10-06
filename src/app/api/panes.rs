@@ -1109,6 +1109,7 @@ impl App {
             PaneMoveDestination::NewTab {
                 workspace_id,
                 label,
+                insert_index,
             } => {
                 let target_workspace_id = if let Some(workspace_id) = workspace_id {
                     let Some(ws_idx) = self.parse_workspace_id(&workspace_id) else {
@@ -1125,6 +1126,7 @@ impl App {
                 ResolvedPaneMoveDestination::NewTab {
                     workspace_id: target_workspace_id,
                     label,
+                    insert_index,
                 }
             }
             PaneMoveDestination::NewWorkspace { label, tab_label } => {
@@ -1226,20 +1228,26 @@ impl App {
             ResolvedPaneMoveDestination::NewTab {
                 workspace_id,
                 label,
+                insert_index,
             } => {
                 let Some(target_ws_idx) = self.parse_workspace_id(&workspace_id) else {
                     self.recover_failed_pane_move(recovery_context, moved);
                     return encode_error(id, "pane_move_failed", "target workspace disappeared");
                 };
                 let moved_pane_id = moved.pane_id;
-                let target_tab_idx = self.state.workspaces[target_ws_idx]
-                    .create_tab_from_existing_pane(
-                        moved,
-                        label,
-                        self.event_tx.clone(),
-                        self.render_notify.clone(),
-                        self.render_dirty.clone(),
-                    );
+                let workspace = &mut self.state.workspaces[target_ws_idx];
+                let mut target_tab_idx = workspace.create_tab_from_existing_pane(
+                    moved,
+                    label,
+                    self.event_tx.clone(),
+                    self.render_notify.clone(),
+                    self.render_dirty.clone(),
+                );
+                if let Some(insert_index) = insert_index {
+                    if workspace.move_tab(target_tab_idx, insert_index) {
+                        target_tab_idx = insert_index;
+                    }
+                }
                 created_tab = true;
                 (target_ws_idx, target_tab_idx, moved_pane_id)
             }
@@ -2231,6 +2239,7 @@ enum ResolvedPaneMoveDestination {
     NewTab {
         workspace_id: String,
         label: Option<String>,
+        insert_index: Option<usize>,
     },
     NewWorkspace {
         label: Option<String>,
@@ -3515,6 +3524,7 @@ mod tests {
                 destination: PaneMoveDestination::NewTab {
                     workspace_id: None,
                     label: Some("moved".into()),
+                    insert_index: None,
                 },
                 focus: true,
             },
@@ -3576,6 +3586,43 @@ mod tests {
     }
 
     #[test]
+    fn api_pane_move_to_new_tab_honors_insert_index() {
+        let mut app = app_with_linked_worktree();
+        let source = app.state.workspaces[0].tabs[0].root_pane;
+        let right = app.state.workspaces[0].test_split(ratatui::layout::Direction::Horizontal);
+        seed_terminal_states(&mut app);
+        let source_public = app.public_pane_id(0, source).unwrap();
+
+        let response = app.handle_pane_move(
+            "req".into(),
+            PaneMoveParams {
+                pane_id: source_public,
+                destination: PaneMoveDestination::NewTab {
+                    workspace_id: None,
+                    label: Some("moved".into()),
+                    insert_index: Some(0),
+                },
+                focus: true,
+            },
+        );
+
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        let ResponseResult::PaneMove { move_result } = success.result else {
+            panic!("expected pane move response");
+        };
+        assert_eq!(app.state.workspaces[0].tabs.len(), 2);
+        assert!(app.state.workspaces[0].tabs[0]
+            .terminal_id(source)
+            .is_some());
+        assert!(app.state.workspaces[0].tabs[1].terminal_id(right).is_some());
+        assert_eq!(app.state.workspaces[0].active_tab, 0);
+        assert_eq!(
+            move_result.created_tab.map(|tab| tab.tab_id),
+            app.public_tab_id(0, 0)
+        );
+    }
+
+    #[test]
     fn api_pane_move_only_pane_to_new_tab_uses_app_render_handles() {
         let mut app = app_with_linked_worktree();
         let source = app.state.workspaces[0].tabs[0].root_pane;
@@ -3589,6 +3636,7 @@ mod tests {
                 destination: PaneMoveDestination::NewTab {
                     workspace_id: None,
                     label: Some("moved".into()),
+                    insert_index: None,
                 },
                 focus: true,
             },
