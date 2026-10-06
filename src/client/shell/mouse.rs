@@ -2010,6 +2010,35 @@ impl ClientShellState {
                     outcome.repaint = true;
                     return;
                 }
+                let header_workspace_id = self
+                    .hits
+                    .agent_entries
+                    .iter()
+                    .find(|hit| hit.pane_id.is_none() && super::contains(hit.rect, point))
+                    .map(|hit| hit.workspace_id.clone());
+                if let Some(workspace_id) = header_workspace_id {
+                    self.open_workspace_context_menu(workspace_id, mouse.column, mouse.row);
+                    outcome.repaint = true;
+                    return;
+                }
+                let agent_tab_id = self
+                    .hits
+                    .agents
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                    .and_then(|(_, pane_id)| {
+                        self.snapshot
+                            .as_deref()?
+                            .agents
+                            .iter()
+                            .find(|agent| agent.pane_id == *pane_id)
+                            .map(|agent| agent.tab_id.clone())
+                    });
+                if let Some(tab_id) = agent_tab_id {
+                    self.open_tab_context_menu(tab_id, mouse.column, mouse.row);
+                    outcome.repaint = true;
+                    return;
+                }
                 let pane_id = self
                     .hits
                     .panes
