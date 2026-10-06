@@ -863,7 +863,10 @@ fn agent_sidebar_groups_agents_under_space_headers() {
     );
     let header_x = lines[first_header].find('▾').expect("header marker");
     let agent_x = lines[first_header + 1].find("alpha").expect("agent label");
-    assert!(agent_x > header_x, "agents should be nested under the header");
+    assert!(
+        agent_x > header_x,
+        "agents should be nested under the header"
+    );
 }
 
 #[test]
