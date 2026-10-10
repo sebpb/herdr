@@ -1050,6 +1050,296 @@ fn grouped_agent_right_click_opens_tab_and_space_menus() {
     ));
 }
 
+fn frame_lines(frame: &crate::client::frame_output::ComposedFrame) -> Vec<String> {
+    frame
+        .cells
+        .chunks(frame.width as usize)
+        .map(|row| {
+            row.iter()
+                .map(|cell| cell.symbol.as_str())
+                .collect::<String>()
+        })
+        .collect()
+}
+
+/// The sidebar part of a frame line, without the divider and pane surface.
+fn sidebar_text(line: &str) -> &str {
+    line.split('│').next().unwrap_or(line).trim_end()
+}
+
+fn agent_header_rect(state: &ClientShellState, workspace_id: &str) -> Rect {
+    state
+        .hits
+        .agent_entries
+        .iter()
+        .find(|hit| hit.pane_id.is_none() && hit.workspace_id == workspace_id)
+        .map(|hit| hit.rect)
+        .unwrap_or_else(|| panic!("missing agent header {workspace_id}"))
+}
+
+fn click_agent_header(state: &mut ClientShellState, workspace_id: &str) -> ClientShellInput {
+    let header = agent_header_rect(state, workspace_id);
+    let mouse = |kind| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: header.x + 2,
+            row: header.y,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    state.handle_raw_events(vec![
+        mouse(MouseEventKind::Down(MouseButton::Left)),
+        mouse(MouseEventKind::Up(MouseButton::Left)),
+    ])
+}
+
+fn visible_agent_hits(state: &ClientShellState) -> Vec<&str> {
+    state
+        .hits
+        .agents
+        .iter()
+        .map(|(_, pane_id)| pane_id.as_str())
+        .collect()
+}
+
+#[test]
+fn grouped_agent_header_click_collapses_and_expands_its_space() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+
+    let click = click_agent_header(&mut state, "ws_1");
+
+    assert!(click.actions.is_empty(), "{:?}", click.actions);
+    assert!(state.collapsed_agent_groups.contains("ws_1"));
+    let frame = state
+        .compose(106, 30)
+        .expect("collapsed agent sidebar frame");
+    let lines = frame_lines(&frame);
+    let header = lines
+        .iter()
+        .position(|line| line.contains("▸ client-shell"))
+        .unwrap_or_else(|| panic!("missing collapsed header: {}", lines.join("\n")));
+    assert!(
+        sidebar_text(&lines[header]).ends_with('2'),
+        "collapsed header should count its hidden agents: {:?}",
+        lines[header]
+    );
+    assert!(!lines.iter().any(|line| line.contains("alpha")));
+    assert!(!lines.iter().any(|line| line.contains("beta")));
+    assert!(lines[header + 1].contains("▾ other-space"));
+    assert!(lines[header + 2].contains("gamma"));
+    assert_eq!(visible_agent_hits(&state), ["pane_3"]);
+
+    click_agent_header(&mut state, "ws_1");
+
+    assert!(state.collapsed_agent_groups.is_empty());
+    let frame = state
+        .compose(106, 30)
+        .expect("expanded agent sidebar frame");
+    assert!(frame_lines(&frame)
+        .iter()
+        .any(|line| line.contains("▾ client-shell")));
+    assert_eq!(visible_agent_hits(&state), ["pane_1", "pane_2", "pane_3"]);
+}
+
+#[test]
+fn collapsed_agent_header_keeps_the_most_urgent_hidden_status_visible() {
+    let mut state = grouped_agent_state();
+    let mut projected = state.snapshot.as_deref().expect("snapshot").clone();
+    projected.agents[0].agent_status = AgentStatus::Working;
+    projected.agents[1].agent_status = AgentStatus::Blocked;
+    state.set_snapshot(Box::new(projected));
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    click_agent_header(&mut state, "ws_1");
+
+    let frame = state
+        .compose(106, 30)
+        .expect("collapsed agent sidebar frame");
+    let lines = frame_lines(&frame);
+    let header = lines
+        .iter()
+        .find(|line| line.contains("▸ client-shell"))
+        .expect("collapsed header");
+    let blocked = status_icon(AgentStatus::Blocked, state.config.status_indicators);
+    assert!(
+        sidebar_text(header).ends_with(&format!("{blocked} 2")),
+        "collapsed header should show the blocked icon: {header:?}"
+    );
+}
+
+#[test]
+fn collapsed_agent_groups_persist_and_prune_missing_spaces() {
+    let path = std::env::temp_dir().join(format!(
+        "herdr-shell-agent-groups-{}-{}.json",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after epoch")
+            .as_nanos()
+    ));
+    let mut state = grouped_agent_state();
+    state.config.preferences_path = Some(path.clone());
+    state.collapsed_agent_groups.insert("ws_gone".into());
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+
+    click_agent_header(&mut state, "ws_2");
+
+    let saved = preferences::load(&path).expect("saved preferences");
+    assert_eq!(saved.collapsed_agent_groups, ["ws_2"]);
+    let reloaded = ClientShellState::new(
+        ClientShellConfig::from_config(&Config::default()).with_preferences_path(path.clone()),
+    );
+    assert_eq!(
+        reloaded.collapsed_agent_groups,
+        HashSet::from(["ws_2".to_string()])
+    );
+    std::fs::remove_file(path).expect("remove agent group preferences");
+}
+
+#[test]
+fn collapsed_agent_header_right_click_still_opens_the_space_menu() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    click_agent_header(&mut state, "ws_1");
+    state
+        .compose(106, 30)
+        .expect("collapsed agent sidebar frame");
+    let header = agent_header_rect(&state, "ws_1");
+
+    state.handle_raw_events(vec![RawInputEvent::Mouse(crossterm::event::MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Right),
+        column: header.x + 2,
+        row: header.y,
+        modifiers: KeyModifiers::empty(),
+    })]);
+
+    assert!(matches!(
+        &state.overlay,
+        Some(ClientShellOverlay::ContextMenu(ClientContextMenuOverlay {
+            target: ClientContextMenuTarget::Workspace { workspace_id, .. },
+            ..
+        })) if workspace_id == "ws_1"
+    ));
+    assert!(state.collapsed_agent_groups.contains("ws_1"));
+}
+
+#[test]
+fn grouped_agent_drop_on_collapsed_header_moves_it_to_the_front_of_that_space() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    click_agent_header(&mut state, "ws_1");
+    state
+        .compose(106, 30)
+        .expect("collapsed agent sidebar frame");
+    let header = agent_header_rect(&state, "ws_1");
+    let gamma = agent_row_rect(&state, "pane_3");
+
+    let actions = drag_agent(&mut state, gamma, header.y);
+
+    let [ClientShellAction::Endpoint { request, .. }] = &actions[..] else {
+        panic!("agent drop should move through endpoint API: {actions:?}");
+    };
+    let crate::api::schema::Method::PaneMove(params) = &request.method else {
+        panic!("expected pane move, got {:?}", request.method);
+    };
+    assert_eq!(params.pane_id, "pane_3");
+    assert_eq!(
+        params.destination,
+        crate::api::schema::PaneMoveDestination::NewTab {
+            workspace_id: Some("ws_1".into()),
+            label: Some("chat 1".into()),
+            insert_index: Some(0),
+        }
+    );
+}
+
+fn agent_binding_target(
+    state: &mut ClientShellState,
+    action: crate::input::KeybindAction,
+) -> Option<String> {
+    let mut input = ClientShellInput::default();
+    state.record_binding(crate::input::KeybindMatch::Action(action), &mut input);
+    match &input.actions[..] {
+        [ClientShellAction::Keybind(_)] => None,
+        [ClientShellAction::Endpoint { request, .. }] => match &request.method {
+            crate::api::schema::Method::PaneFocus(target) => Some(target.pane_id.clone()),
+            method => panic!("expected pane focus, got {method:?}"),
+        },
+        actions => panic!("expected one endpoint action: {actions:?}"),
+    }
+}
+
+#[test]
+fn agent_navigation_skips_agents_hidden_in_collapsed_spaces() {
+    let mut state = grouped_agent_state();
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    click_agent_header(&mut state, "ws_1");
+
+    // The focused pane_1 is hidden, so navigation starts from the first visible agent.
+    assert_eq!(
+        agent_binding_target(&mut state, crate::input::KeybindAction::NextAgent).as_deref(),
+        Some("pane_3")
+    );
+    assert_eq!(
+        agent_binding_target(&mut state, crate::input::KeybindAction::FocusAgent(0)).as_deref(),
+        Some("pane_3")
+    );
+    assert_eq!(
+        agent_binding_target(&mut state, crate::input::KeybindAction::FocusAgent(1)),
+        None
+    );
+}
+
+#[test]
+fn collapsed_agent_header_highlights_a_hidden_focused_agent() {
+    let mut state = grouped_agent_state();
+    let mut projected = state.snapshot.as_deref().expect("snapshot").clone();
+    projected.agents[1].focused = true;
+    state.set_snapshot(Box::new(projected));
+    state.compose(106, 30).expect("grouped agent sidebar frame");
+    click_agent_header(&mut state, "ws_1");
+
+    let frame = state
+        .compose(106, 30)
+        .expect("collapsed agent sidebar frame");
+    let header = agent_header_rect(&state, "ws_1");
+    let other = agent_header_rect(&state, "ws_2");
+    let bg =
+        |rect: Rect| frame.cells[rect.y as usize * frame.width as usize + rect.x as usize + 1].bg;
+    assert_ne!(
+        bg(header),
+        bg(other),
+        "the header hiding the focused agent should be highlighted"
+    );
+}
+
+#[test]
+fn grouped_agent_navigation_scrolls_by_panel_entry() {
+    let mut state = grouped_agent_state();
+    state
+        .compose(106, 10)
+        .expect("short grouped agent sidebar frame");
+    assert!(
+        !visible_agent_hits(&state).contains(&"pane_3"),
+        "precondition: gamma starts below the fold: {:?}",
+        visible_agent_hits(&state)
+    );
+
+    assert_eq!(
+        agent_binding_target(&mut state, crate::input::KeybindAction::PreviousAgent).as_deref(),
+        Some("pane_3")
+    );
+    state
+        .compose(106, 10)
+        .expect("scrolled grouped agent sidebar frame");
+
+    assert!(
+        visible_agent_hits(&state).contains(&"pane_3"),
+        "gamma should be revealed: {:?}",
+        visible_agent_hits(&state)
+    );
+}
+
 #[test]
 fn muted_agent_sidebar_rows_do_not_stack_terminal_faint() {
     let mut projected = snapshot();

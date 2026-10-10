@@ -908,6 +908,8 @@ pub(crate) struct ClientShellState {
     pub(super) agent_press: Option<ClientAgentPress>,
     pub(super) collapsed_groups: HashSet<String>,
     pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
+    /// Workspace ids whose agents the grouped agent panel hides under their header.
+    pub(super) collapsed_agent_groups: HashSet<String>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) pending_agent_reveal: Option<(ClientEndpointId, String)>,
@@ -1083,6 +1085,7 @@ impl ClientShellState {
             agent_press: None,
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             remote_collapsed_groups,
+            collapsed_agent_groups: preferences.collapsed_agent_groups.into_iter().collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
             pending_agent_reveal: None,
@@ -1207,6 +1210,12 @@ impl ClientShellState {
         };
         if !groups.remove(&key) {
             groups.insert(key);
+        }
+    }
+
+    pub(super) fn toggle_collapsed_agent_group(&mut self, workspace_id: &str) {
+        if !self.collapsed_agent_groups.remove(workspace_id) {
+            self.collapsed_agent_groups.insert(workspace_id.to_owned());
         }
     }
 

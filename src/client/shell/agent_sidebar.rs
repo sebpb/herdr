@@ -50,6 +50,80 @@ pub(super) fn ordered_agent_pane_ids(
         .collect()
 }
 
+/// Whether the agent panel nests agents under space headers.
+pub(super) fn agent_panel_grouped(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+) -> bool {
+    config.agents.group_by_space
+        && config.agent_panel_sort == crate::config::AgentPanelSortConfig::Spaces
+        && snapshot.agent_view_label.is_none()
+}
+
+/// Agent panel entries in display order: `None` for a space header, `Some(pane_id)` for a
+/// visible agent. Agents of collapsed spaces are omitted.
+fn agent_panel_layout(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_agent_groups: &HashSet<String>,
+) -> Vec<Option<String>> {
+    let grouped = agent_panel_grouped(snapshot, config);
+    let mut entries = Vec::new();
+    let mut current: Option<String> = None;
+    for pane_id in ordered_agent_pane_ids(snapshot, config.agent_panel_sort) {
+        let Some(workspace_id) = snapshot
+            .agents
+            .iter()
+            .find(|agent| agent.pane_id == pane_id)
+            .map(|agent| agent.workspace_id.as_str())
+            .filter(|workspace_id| {
+                snapshot
+                    .workspaces
+                    .iter()
+                    .any(|workspace| workspace.workspace_id == *workspace_id)
+            })
+        else {
+            continue;
+        };
+        if !grouped {
+            entries.push(Some(pane_id));
+            continue;
+        }
+        if current.as_deref() != Some(workspace_id) {
+            entries.push(None);
+            current = Some(workspace_id.to_owned());
+        }
+        if !collapsed_agent_groups.contains(workspace_id) {
+            entries.push(Some(pane_id));
+        }
+    }
+    entries
+}
+
+/// Agents the panel shows, in order; agents of collapsed spaces are skipped.
+pub(super) fn visible_agent_pane_ids(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_agent_groups: &HashSet<String>,
+) -> Vec<String> {
+    agent_panel_layout(snapshot, config, collapsed_agent_groups)
+        .into_iter()
+        .flatten()
+        .collect()
+}
+
+/// Index of the panel entry showing `pane_id`, counting space headers.
+pub(super) fn agent_entry_index(
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    collapsed_agent_groups: &HashSet<String>,
+    pane_id: &str,
+) -> Option<usize> {
+    agent_panel_layout(snapshot, config, collapsed_agent_groups)
+        .iter()
+        .position(|entry| entry.as_deref() == Some(pane_id))
+}
+
 pub(super) fn render_agent_panel(
     buffer: &mut Buffer,
     area: Rect,
@@ -58,6 +132,7 @@ pub(super) fn render_agent_panel(
     agent_scroll: &mut usize,
     dragged_pane_id: Option<&str>,
     drop_indicator_row: Option<u16>,
+    collapsed_agent_groups: &HashSet<String>,
     hits: &mut ShellHitMap,
 ) {
     if !render_agent_panel_header(
@@ -71,11 +146,9 @@ pub(super) fn render_agent_panel(
     }
 
     let rows = agent_rows(snapshot, config, None);
-    let grouped = config.agents.group_by_space
-        && config.agent_panel_sort == crate::config::AgentPanelSortConfig::Spaces
-        && snapshot.agent_view_label.is_none();
+    let grouped = agent_panel_grouped(snapshot, config);
     let entries = if grouped {
-        grouped_agent_entries(snapshot, rows)
+        grouped_agent_entries(snapshot, rows, collapsed_agent_groups)
     } else {
         rows.into_iter().map(AgentPanelEntry::Agent).collect()
     };
@@ -95,17 +168,13 @@ pub(super) fn render_agent_panel(
             AgentPanelEntry::Agent(row) => row.rows.len(),
         },
         |buffer, rect, entry, hits| match entry {
-            AgentPanelEntry::Header {
-                workspace_id,
-                label,
-                focused,
-            } => {
+            AgentPanelEntry::Header(header) => {
                 hits.agent_entries.push(AgentEntryHit {
                     rect,
-                    workspace_id: workspace_id.clone(),
+                    workspace_id: header.workspace_id.clone(),
                     pane_id: None,
                 });
-                render_space_header(buffer, rect, label, *focused, config);
+                render_space_header(buffer, rect, header, config);
             }
             AgentPanelEntry::Agent(row) => {
                 hits.agents.push((rect, row.pane_id.clone()));
@@ -149,19 +218,28 @@ pub(super) fn render_agent_panel(
 
 const GROUP_INDENT: u16 = 2;
 
+struct SpaceHeader {
+    workspace_id: String,
+    label: String,
+    focused: bool,
+    collapsed: bool,
+    /// Agents hidden by the collapse, their most urgent status, and whether one is focused.
+    hidden_agents: usize,
+    hidden_status: Option<crate::api::schema::AgentStatus>,
+    hidden_focused: bool,
+}
+
 enum AgentPanelEntry {
-    Header {
-        workspace_id: String,
-        label: String,
-        focused: bool,
-    },
+    Header(SpaceHeader),
     Agent(AgentRow),
 }
 
-/// Inserts a header before each run of agents that share a space.
+/// Inserts a header before each run of agents that share a space; agents of collapsed spaces
+/// fold into their header.
 fn grouped_agent_entries(
     snapshot: &ClientShellSnapshot,
     rows: Vec<AgentRow>,
+    collapsed_agent_groups: &HashSet<String>,
 ) -> Vec<AgentPanelEntry> {
     let mut entries = Vec::with_capacity(rows.len() * 2);
     let mut current: Option<String> = None;
@@ -171,12 +249,29 @@ fn grouped_agent_entries(
                 .workspaces
                 .iter()
                 .find(|workspace| workspace.workspace_id == row.workspace_id);
-            entries.push(AgentPanelEntry::Header {
+            entries.push(AgentPanelEntry::Header(SpaceHeader {
                 workspace_id: row.workspace_id.clone(),
                 label: workspace.map_or_else(String::new, |workspace| workspace.label.clone()),
                 focused: workspace.is_some_and(|workspace| workspace.focused),
-            });
+                collapsed: collapsed_agent_groups.contains(&row.workspace_id),
+                hidden_agents: 0,
+                hidden_status: None,
+                hidden_focused: false,
+            }));
             current = Some(row.workspace_id.clone());
+        }
+        if let Some(AgentPanelEntry::Header(header)) = entries
+            .last_mut()
+            .filter(|_| collapsed_agent_groups.contains(&row.workspace_id))
+        {
+            header.hidden_agents += 1;
+            header.hidden_focused |= row.focused;
+            header.hidden_status = header
+                .hidden_status
+                .into_iter()
+                .chain([row.status])
+                .max_by_key(|status| status_priority(*status));
+            continue;
         }
         entries.push(AgentPanelEntry::Agent(row));
     }
@@ -186,23 +281,67 @@ fn grouped_agent_entries(
 fn render_space_header(
     buffer: &mut Buffer,
     rect: Rect,
-    label: &str,
-    focused: bool,
+    header: &SpaceHeader,
     config: &ClientShellConfig,
 ) {
+    let palette = &config.palette;
+    if header.hidden_focused {
+        buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
+    }
     let style = Style::default()
-        .fg(if focused {
-            config.palette.text
+        .fg(if header.focused {
+            palette.text
         } else {
-            config.palette.overlay1
+            palette.overlay1
         })
         .add_modifier(Modifier::BOLD);
+    let marker = if header.collapsed { '▸' } else { '▾' };
+    let mut label_width = rect.width.saturating_sub(1);
+    if header.collapsed {
+        let count = header.hidden_agents.to_string();
+        let count_width = display_width(&count) as u16;
+        let count_x = rect.right().saturating_sub(count_width.saturating_add(1));
+        put_text(
+            buffer,
+            count_x,
+            rect.y,
+            count_width,
+            &count,
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+        );
+        let mut suffix_x = count_x;
+        if let Some(status) = header.hidden_status.filter(|status| {
+            matches!(
+                status,
+                crate::api::schema::AgentStatus::Blocked
+                    | crate::api::schema::AgentStatus::Done
+                    | crate::api::schema::AgentStatus::Working
+            )
+        }) {
+            let icon = status_icon(status, config.status_indicators);
+            let icon_width = display_width(icon) as u16;
+            suffix_x = count_x.saturating_sub(icon_width.saturating_add(1));
+            put_text(
+                buffer,
+                suffix_x,
+                rect.y,
+                icon_width,
+                icon,
+                Style::default().fg(status_color(status, palette)),
+            );
+        }
+        label_width = suffix_x
+            .saturating_sub(rect.x.saturating_add(2))
+            .min(label_width);
+    }
     put_text(
         buffer,
         rect.x.saturating_add(1),
         rect.y,
-        rect.width.saturating_sub(1),
-        &format!("▾ {label}"),
+        label_width,
+        &format!("{marker} {}", header.label),
         style,
     );
 }

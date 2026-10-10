@@ -48,6 +48,25 @@ impl ClientShellState {
             })
             .collect::<Vec<_>>();
         remote_collapsed_groups.sort_by(|left, right| left.profile_id.cmp(&right.profile_id));
+        // The grouped agent panel only renders the Local snapshot; drop spaces it no longer has.
+        let local_snapshot = self
+            .snapshot
+            .as_deref()
+            .filter(|_| self.active_endpoint_id.is_local());
+        let mut collapsed_agent_groups = self
+            .collapsed_agent_groups
+            .iter()
+            .filter(|workspace_id| {
+                local_snapshot.is_none_or(|snapshot| {
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .any(|workspace| &workspace.workspace_id == *workspace_id)
+                })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        collapsed_agent_groups.sort();
         let preferences = preferences::ClientChromePreferences {
             sidebar_width: self.sidebar_width_manual.then_some(self.sidebar_width),
             sidebar_section_split: self
@@ -61,6 +80,7 @@ impl ClientShellState {
                 .then_some(self.config.agent_panel_sort),
             collapsed_groups,
             remote_collapsed_groups,
+            collapsed_agent_groups,
         };
         if let Err(error) = preferences::store(path, preferences) {
             self.set_endpoint_error(error);

@@ -79,6 +79,7 @@ impl ClientShellState {
             workspace_drop_indicator_row: None,
             dragged_agent_pane_id: None,
             agent_drop_indicator_row: None,
+            collapsed_agent_groups: &self.collapsed_agent_groups,
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -244,6 +245,7 @@ impl ClientShellState {
                 workspace_drop_indicator_row,
                 dragged_agent_pane_id,
                 agent_drop_indicator_row,
+                collapsed_agent_groups: &self.collapsed_agent_groups,
             },
         );
         self.hits.panes = surface

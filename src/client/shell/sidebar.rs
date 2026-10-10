@@ -438,6 +438,7 @@ pub(crate) fn render_sidebar(
         state.agent_scroll,
         state.dragged_agent_pane_id,
         state.agent_drop_indicator_row,
+        state.collapsed_agent_groups,
         hits,
     );
 

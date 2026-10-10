@@ -250,6 +250,7 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) workspace_drop_indicator_row: Option<u16>,
     pub(super) dragged_agent_pane_id: Option<&'a str>,
     pub(super) agent_drop_indicator_row: Option<u16>,
+    pub(super) collapsed_agent_groups: &'a HashSet<String>,
 }
 
 pub(super) fn render_shell(

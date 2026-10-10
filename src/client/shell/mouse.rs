@@ -2330,6 +2330,18 @@ impl ClientShellState {
                 if self.handle_endpoint_agent_click(point, outcome) {
                     return;
                 }
+                let header_workspace_id = self
+                    .hits
+                    .agent_entries
+                    .iter()
+                    .find(|hit| hit.pane_id.is_none() && super::contains(hit.rect, point))
+                    .map(|hit| hit.workspace_id.clone());
+                if let Some(workspace_id) = header_workspace_id {
+                    self.toggle_collapsed_agent_group(&workspace_id);
+                    self.persist_chrome_preferences(outcome);
+                    outcome.repaint = true;
+                    return;
+                }
                 let agent_press = self
                     .config
                     .mouse_capture
