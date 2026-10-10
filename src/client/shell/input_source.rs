@@ -7,6 +7,7 @@ impl ClientShellState {
                 overlay,
                 ClientShellOverlay::ConfirmClose(_)
                     | ClientShellOverlay::ConfirmSessionSwitch(_)
+                    | ClientShellOverlay::ConfirmProjectDelete(_)
                     | ClientShellOverlay::Help(_)
                     | ClientShellOverlay::Navigator(_)
                     | ClientShellOverlay::WorktreeRemove(_)

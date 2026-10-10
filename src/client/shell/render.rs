@@ -2,6 +2,8 @@ use super::*;
 
 #[path = "../shell/overlays.rs"]
 mod overlays;
+#[path = "../shell/projects_sidebar.rs"]
+mod projects_sidebar;
 #[path = "../shell/sidebar.rs"]
 pub(in crate::client::shell) mod sidebar;
 #[path = "../shell/tabs.rs"]
@@ -253,6 +255,9 @@ pub(super) struct ShellRenderState<'a> {
     pub(super) dragged_agent_pane_id: Option<&'a str>,
     pub(super) agent_drop_indicator_row: Option<u16>,
     pub(super) collapsed_agent_groups: &'a HashSet<String>,
+    /// Rows of the projects section; `None` hides it.
+    pub(super) projects: Option<&'a [super::ProjectEntry]>,
+    pub(super) project_scroll: &'a mut usize,
 }
 
 pub(super) fn render_shell(
@@ -333,6 +338,8 @@ pub(super) fn render_shell(
         hits.agent_scrollbar = Rect::default();
         hits.agent_sort_toggle = Rect::default();
         hits.new_workspace = Rect::default();
+        hits.projects.clear();
+        hits.projects_new = Rect::default();
         hits.machines.clear();
         hits.workspaces.clear();
         hits.agents.clear();

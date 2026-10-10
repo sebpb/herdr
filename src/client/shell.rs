@@ -28,6 +28,7 @@ mod notification_policy;
 mod notifications;
 mod overlay_input;
 mod preferences;
+mod projects;
 mod render;
 mod scroll;
 mod session_switch;
@@ -40,6 +41,7 @@ mod worktrees;
 use text_editor::TextEditor;
 use word_selection::ClientWordSelection;
 
+pub(crate) use projects::{ProjectEntry, ProjectsCommand};
 pub(in crate::client::shell) use render::sidebar;
 pub(crate) use session_switch::{ClientSessionSwitchConfirmOverlay, SessionSwitchRequest};
 pub(crate) use state::*;

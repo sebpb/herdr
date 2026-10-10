@@ -249,7 +249,8 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let sections = super::sidebar::sidebar_sections(area, state, hits);
+    // The multi-machine sidebar has no projects section: projects are Local sessions.
+    let sections = super::sidebar::sidebar_sections(area, state, 0, hits);
     let (workspace_area, detail_area) = (sections.spaces, sections.agents);
     let machines_collapsed = state
         .collapsed_sidebar_sections

@@ -1898,6 +1898,9 @@ impl ClientShellState {
                     Some(ClientShellOverlay::ConfirmSessionSwitch(_)) => {
                         self.accept_session_switch_confirmation(outcome);
                     }
+                    Some(ClientShellOverlay::ConfirmProjectDelete(_)) => {
+                        self.accept_project_delete_confirmation(outcome);
+                    }
                     _ => {}
                 }
             } else if super::contains(self.hits.overlay_clear, point) {
@@ -2009,6 +2012,10 @@ impl ClientShellState {
                 if !self.config.mouse_capture {
                     return;
                 }
+                if self.handle_projects_right_click(point, mouse.column, mouse.row) {
+                    outcome.repaint = true;
+                    return;
+                }
                 let workspace_id = (!self.sidebar_collapsed)
                     .then(|| self.active_endpoint_workspace_at(point))
                     .flatten();
@@ -2097,6 +2104,11 @@ impl ClientShellState {
                     crate::input::KeybindMatch::Action(crate::input::KeybindAction::NextTab),
                     outcome,
                 );
+            }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if super::contains(self.hits.projects_body, point) =>
+            {
+                outcome.repaint |= self.scroll_projects(mouse.kind == MouseEventKind::ScrollDown);
             }
             MouseEventKind::ScrollUp if super::contains(self.hits.agent_body, point) => {
                 let next = self.agent_scroll.saturating_sub(1);
@@ -2248,6 +2260,9 @@ impl ClientShellState {
                 if super::contains(self.hits.global_launcher, point) {
                     self.toggle_global_menu();
                     outcome.repaint = true;
+                    return;
+                }
+                if self.handle_projects_click(point, outcome) {
                     return;
                 }
                 let section_title = self

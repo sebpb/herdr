@@ -212,7 +212,34 @@ pub(crate) fn render_sidebar(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let sections = sidebar_sections(area, state, hits);
+    let projects_rows = state
+        .projects
+        .map_or(0, super::projects_sidebar::projects_natural_rows);
+    let sections = sidebar_sections(area, state, projects_rows, hits);
+    if let (Some(projects_area), Some(projects)) = (sections.projects, state.projects) {
+        super::projects_sidebar::render_projects_section(
+            buffer,
+            projects_area,
+            projects,
+            snapshot,
+            config,
+            state
+                .collapsed_sidebar_sections
+                .contains(&SidebarSection::Projects),
+            state.project_scroll,
+            hits,
+        );
+    }
+    if let Some(divider) = sections.projects_divider {
+        put_text(
+            buffer,
+            divider.x,
+            divider.y,
+            divider.width,
+            &"─".repeat(divider.width as usize),
+            Style::default().fg(palette.surface_dim),
+        );
+    }
     let (workspace_area, detail_area) = (sections.spaces, sections.agents);
     let spaces_collapsed = state
         .collapsed_sidebar_sections
@@ -275,16 +302,18 @@ pub(crate) fn render_sidebar(
 }
 
 /// Lays out the expanded sidebar sections and records the section divider hits.
+/// `projects_rows` is the natural height of the projects section (0 hides it).
 pub(in crate::client::shell) fn sidebar_sections(
     area: Rect,
     state: &ShellRenderState<'_>,
+    projects_rows: u16,
     hits: &mut ShellHitMap,
 ) -> crate::ui::SidebarSectionRects {
     let sections = crate::ui::sidebar_section_rects(
         area,
         state.sidebar_section_split,
         state.collapsed_sidebar_sections,
-        0,
+        projects_rows,
     );
     hits.sidebar_section_divider = sections.divider.unwrap_or_default();
     hits.sidebar_section_split_area = sections.split_area;

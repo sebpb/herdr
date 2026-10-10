@@ -67,6 +67,12 @@ pub(crate) fn render_client_overlay(
         ClientShellOverlay::ConfirmSessionSwitch(v) => {
             session_switch_overlay::render_session_switch_confirm_overlay(b, v, p)
         }
+        ClientShellOverlay::ConfirmProjectDelete(v) => render_confirm_dialog(
+            b,
+            &format!("Delete project {}?", v.label),
+            &format!("Removes session {} and its saved layout.", v.name),
+            p,
+        ),
         ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
         ClientShellOverlay::Navigator(v) => {
             render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)
@@ -663,6 +669,20 @@ fn render_rename_overlay(
             .bg(p.panel_bg)
             .add_modifier(Modifier::BOLD),
     );
+    if let ClientRenameTarget::Project(prompt) = &v.target {
+        if let Some((message, error)) = prompt.message() {
+            put_text(
+                b,
+                i.x,
+                i.y + 1,
+                i.width,
+                message,
+                Style::default()
+                    .fg(if error { p.red } else { p.overlay0 })
+                    .bg(p.panel_bg),
+            );
+        }
+    }
     let input = Rect::new(i.x, i.y + 2, i.width, 1);
     b.set_style(input, Style::default().fg(p.text).bg(p.surface0));
     let cursor = text_editor::render(
@@ -1262,6 +1282,15 @@ fn render_confirm_close_overlay(
     c: &ClientConfirmCloseOverlay,
     p: &Palette,
 ) -> Option<OverlayRender> {
+    render_confirm_dialog(b, &c.title, &c.detail, p)
+}
+
+fn render_confirm_dialog(
+    b: &mut Buffer,
+    title: &str,
+    detail: &str,
+    p: &Palette,
+) -> Option<OverlayRender> {
     let q = popup(b.area, 64, 6)?;
     let i = panel(b, q, p.red, p.panel_bg)?;
     put_text(
@@ -1269,7 +1298,7 @@ fn render_confirm_close_overlay(
         i.x,
         i.y,
         i.width,
-        &format!(" {}", c.title),
+        &format!(" {title}"),
         Style::default()
             .fg(p.red)
             .bg(p.panel_bg)
@@ -1280,7 +1309,7 @@ fn render_confirm_close_overlay(
         i.x,
         i.y + 1,
         i.width,
-        &format!(" {}", c.detail),
+        &format!(" {detail}"),
         Style::default().fg(p.text).bg(p.panel_bg),
     );
     let rs = row(i, &[13, 12], 2, 3);

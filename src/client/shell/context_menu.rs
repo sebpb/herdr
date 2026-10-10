@@ -45,6 +45,13 @@ impl ClientContextMenuOverlay {
                     Action::ToggleGroup,
                 ),
             ],
+            ClientContextMenuTarget::Project { deletable, .. } => {
+                let mut items = vec![item("Rename", Action::Rename)];
+                if *deletable {
+                    items.push(item("Delete...", Action::DeleteProject));
+                }
+                items
+            }
             ClientContextMenuTarget::Tab { .. } => vec![
                 item("New tab", Action::NewTab),
                 item("Rename", Action::Rename),
@@ -201,6 +208,9 @@ impl ClientShellState {
                 tab_id,
                 workspace_id,
             } => self.activate_tab_context_action(tab_id, workspace_id, action, outcome),
+            ClientContextMenuTarget::Project { name, .. } => {
+                self.activate_project_context_action(name, action)
+            }
             ClientContextMenuTarget::Pane {
                 pane_id,
                 workspace_id,

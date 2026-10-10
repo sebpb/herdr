@@ -81,6 +81,11 @@ impl ClientShellState {
             dragged_agent_pane_id: None,
             agent_drop_indicator_row: None,
             collapsed_agent_groups: &self.collapsed_agent_groups,
+            projects: (self.config.projects_enabled
+                && self.endpoints.len() == 1
+                && !self.projects.entries.is_empty())
+            .then_some(self.projects.entries.as_slice()),
+            project_scroll: &mut self.projects.scroll,
         };
         if let Some(snapshot) = local_snapshot {
             render::render_sidebar(
@@ -248,6 +253,11 @@ impl ClientShellState {
                 dragged_agent_pane_id,
                 agent_drop_indicator_row,
                 collapsed_agent_groups: &self.collapsed_agent_groups,
+                projects: (self.config.projects_enabled
+                    && self.endpoints.len() == 1
+                    && !self.projects.entries.is_empty())
+                .then_some(self.projects.entries.as_slice()),
+                project_scroll: &mut self.projects.scroll,
             },
         );
         self.hits.panes = surface

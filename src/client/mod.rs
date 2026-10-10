@@ -31,6 +31,7 @@ mod image_files;
 mod input;
 mod loop_config;
 mod notifications;
+mod projects;
 mod session_switch;
 mod shell;
 mod shell_runtime;
@@ -492,6 +493,7 @@ async fn run_client_loop(
         draw_host_cursor,
         detached_process_children: Vec::new(),
         session_switch: Default::default(),
+        projects: Default::default(),
         shell: config.shell_config.map(shell::ClientShellState::new),
     };
     let mut federated = endpoint_catalog.has_enabled_ssh();
@@ -542,6 +544,7 @@ async fn run_client_loop(
 
     let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
     state.session_switch = session_switch::SessionSwitchRuntime::new(event_tx.clone());
+    state.projects = projects::ProjectsRuntime::new(event_tx.clone());
 
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme = state.attach_escape.is_none();
@@ -1955,6 +1958,7 @@ async fn run_client_loop(
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
                             &mut state.session_switch,
+                            &mut state.projects,
                             &mut scheduled_activation,
                         )?;
                         let repaint = repaint || dispatch_repaint;
@@ -2308,14 +2312,35 @@ async fn run_client_loop(
                 } else {
                     state.session_switch.fail();
                 }
+                if result.is_ok() {
+                    state.projects.run(shell::ProjectsCommand::Refresh);
+                }
                 if let Some(shell) = state.shell.as_mut() {
                     if result.is_ok() {
                         shell.reload_local_preferences(&socket_path);
+                        shell.mark_current_project(request.target.as_deref());
                     }
                     shell.show_session_switch_notice(notice);
                     if let Some(frame) = shell.compose(state.reported_size.0, state.reported_size.1)
                     {
                         state.present_frozen_chrome(frame);
+                    }
+                }
+            }
+            ClientLoopEvent::ProjectsListed {
+                generation,
+                listing,
+            } => {
+                if !state.projects.finish(generation) {
+                    continue;
+                }
+                let Some(shell) = state.shell.as_mut() else {
+                    continue;
+                };
+                if shell.receive_projects(listing.projects, listing.notice) {
+                    if let Some(frame) = shell.compose(state.reported_size.0, state.reported_size.1)
+                    {
+                        state.present_frame(frame);
                     }
                 }
             }
@@ -2416,6 +2441,9 @@ async fn run_client_loop(
                         .collect::<Vec<_>>();
                     let (effects, outcome, frame) = {
                         let shell = state.shell.as_mut().expect("checked shell mode");
+                        state
+                            .projects
+                            .tick(now, !is_remote_client && shell.projects_refresh_wanted());
                         let mut outcome = shell.tick_selection_autoscroll(now);
                         for expired in expired_endpoints {
                             if !shell.endpoint_is_active(&expired.endpoint_id) {

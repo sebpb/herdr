@@ -80,6 +80,7 @@ pub(super) struct ClientState {
     pub(super) draw_host_cursor: bool,
     pub(super) detached_process_children: Vec<std::process::Child>,
     pub(super) session_switch: super::session_switch::SessionSwitchRuntime,
+    pub(super) projects: super::projects::ProjectsRuntime,
     pub(super) shell: Option<shell::ClientShellState>,
 }
 
@@ -142,6 +143,7 @@ impl ClientState {
             draw_host_cursor: false,
             detached_process_children: Vec::new(),
             session_switch: Default::default(),
+            projects: Default::default(),
             shell: Some(shell::ClientShellState::new(
                 shell::ClientShellConfig::from_config(&crate::config::Config::default()),
             )),

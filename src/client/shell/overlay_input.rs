@@ -894,6 +894,21 @@ impl ClientShellState {
             return;
         }
 
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::ConfirmProjectDelete(_))
+        ) {
+            match key.code {
+                KeyCode::Enter => self.accept_project_delete_confirmation(outcome),
+                KeyCode::Esc => {
+                    self.overlay = None;
+                    outcome.repaint = true;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if matches!(self.overlay, Some(ClientShellOverlay::ConfirmClose(_))) {
             if key.code == KeyCode::Enter {
                 self.accept_close_confirmation(outcome);
@@ -945,6 +960,13 @@ impl ClientShellState {
     pub(super) fn save_rename_overlay(&mut self, outcome: &mut ClientShellInput) {
         let Some(ClientShellOverlay::Rename(rename)) = self.overlay.take() else {
             return;
+        };
+        let rename = match rename.target {
+            ClientRenameTarget::Project(prompt) => {
+                self.save_project_prompt(prompt, rename.input, rename.title, outcome);
+                return;
+            }
+            target => ClientRenameOverlay { target, ..rename },
         };
         let trimmed = rename.input.trim();
         let method = match rename.target {
@@ -999,6 +1021,7 @@ impl ClientShellState {
                     label: Some(trimmed.to_owned()),
                 },
             )),
+            ClientRenameTarget::Project(_) => None,
         };
         if let Some(method) = method {
             self.push_endpoint_method(method, outcome);

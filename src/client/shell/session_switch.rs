@@ -17,8 +17,6 @@ pub(crate) struct SessionSwitchRequest {
     pub(crate) create_cwd: Option<std::path::PathBuf>,
 }
 
-// The projects sidebar section builds these requests; until it lands only tests do.
-#[allow(dead_code)]
 impl SessionSwitchRequest {
     /// Builds a request from a user-facing session name (`"default"` is the default session).
     pub(crate) fn new(target: &str) -> Result<Self, String> {
@@ -50,8 +48,6 @@ impl ClientShellState {
     /// Entry point for UI surfaces: asks the runtime to check the current
     /// session for work that suspending it would lose. The runtime answers
     /// through [`Self::receive_session_switch_warnings`].
-    // The projects sidebar section is the first UI caller; until it lands only tests call this.
-    #[allow(dead_code)]
     pub(crate) fn request_session_switch(
         &mut self,
         request: SessionSwitchRequest,

@@ -7,6 +7,7 @@ pub(super) fn dispatch_client_shell_actions(
     mut shell: Option<&mut shell::ClientShellState>,
     detached_process_children: &mut Vec<std::process::Child>,
     session_switch: &mut super::session_switch::SessionSwitchRuntime,
+    projects: &mut super::projects::ProjectsRuntime,
     scheduled_activation: &mut Option<ClientLoopEvent>,
 ) -> Result<(Vec<crossterm::event::MouseEvent>, bool), ClientError> {
     let mut replay_mouse = Vec::new();
@@ -63,6 +64,7 @@ pub(super) fn dispatch_client_shell_actions(
             shell::ClientShellAction::SwitchSession(request) => {
                 repaint |= session_switch.begin_switch(request, shell.as_deref_mut());
             }
+            shell::ClientShellAction::Projects(command) => projects.run(command),
             shell::ClientShellAction::Keybind(action) => {
                 debug!(
                     ?action,
@@ -297,6 +299,7 @@ pub(super) fn begin_endpoint_activation(
                 Some(shell),
                 &mut state.detached_process_children,
                 &mut state.session_switch,
+                &mut state.projects,
                 scheduled_activation,
             )?;
             if repaint {
@@ -749,6 +752,7 @@ pub(super) fn finish_client_shell_input(
         state.shell.as_mut(),
         &mut state.detached_process_children,
         &mut state.session_switch,
+        &mut state.projects,
         scheduled_activation,
     )?;
     let frame = if dispatch_repaint {

@@ -42,5 +42,10 @@ pub(super) enum ClientLoopEvent {
         request: shell::SessionSwitchRequest,
         result: Result<(), String>,
     },
+    /// A background projects job finished (see `projects::ProjectsRuntime`).
+    ProjectsListed {
+        generation: u64,
+        listing: projects::ProjectsListing,
+    },
     Timer,
 }

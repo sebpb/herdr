@@ -23,6 +23,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) hide_tab_bar_when_single_tab: bool,
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
+    pub(super) projects_enabled: bool,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
     pub(super) sound_enabled: bool,
@@ -105,6 +106,11 @@ pub(super) struct ShellHitMap {
     pub(super) sidebar_section_divider: Rect,
     pub(super) sidebar_section_split_area: Rect,
     pub(super) section_titles: Vec<(Rect, crate::ui::SidebarSection)>,
+    /// Project rows by session name (`None` is the default session).
+    pub(super) projects: Vec<(Rect, Option<String>)>,
+    pub(super) projects_new: Rect,
+    pub(super) projects_body: Rect,
+    pub(super) project_max_scroll: usize,
     pub(super) sidebar_toggle: Rect,
     pub(super) new_workspace: Rect,
     pub(super) new_tab: Rect,
@@ -285,6 +291,8 @@ pub(crate) enum ClientShellAction {
     RequestSessionSwitch(SessionSwitchRequest),
     /// Suspend the current session and move Local to the requested one.
     SwitchSession(SessionSwitchRequest),
+    /// Change or re-list the projects off the loop.
+    Projects(super::projects::ProjectsCommand),
 }
 
 #[derive(Default)]
@@ -315,6 +323,7 @@ pub(super) enum ClientShellOverlayKind {
     Rename,
     ConfirmClose,
     ConfirmSessionSwitch,
+    ConfirmProjectDelete,
     Help,
     Navigator,
     WorktreeCreate,
@@ -347,6 +356,7 @@ pub(super) enum ClientRenameTarget {
     Pane {
         pane_id: String,
     },
+    Project(super::projects::ClientProjectPrompt),
 }
 
 #[derive(Debug)]
@@ -557,6 +567,7 @@ pub(super) enum ClientContextMenuAction {
     Zoom,
     ToggleRightClickPassthrough,
     ClosePane,
+    DeleteProject,
 }
 
 #[derive(Debug)]
@@ -572,6 +583,11 @@ pub(super) enum ClientContextMenuTarget {
     Tab {
         tab_id: String,
         workspace_id: String,
+    },
+    /// A project row; `name` is `None` for the default session.
+    Project {
+        name: Option<String>,
+        deletable: bool,
     },
     Pane {
         pane_id: String,
@@ -619,6 +635,7 @@ pub(super) enum ClientShellOverlay {
     Rename(ClientRenameOverlay),
     ConfirmClose(ClientConfirmCloseOverlay),
     ConfirmSessionSwitch(ClientSessionSwitchConfirmOverlay),
+    ConfirmProjectDelete(super::projects::ClientProjectDeleteConfirmOverlay),
     Help(ClientHelpOverlay),
     Navigator(ClientNavigatorOverlay),
     WorktreeCreate(ClientWorktreeCreateOverlay),
@@ -638,6 +655,7 @@ impl ClientShellOverlay {
             Self::Rename(_) => ClientShellOverlayKind::Rename,
             Self::ConfirmClose(_) => ClientShellOverlayKind::ConfirmClose,
             Self::ConfirmSessionSwitch(_) => ClientShellOverlayKind::ConfirmSessionSwitch,
+            Self::ConfirmProjectDelete(_) => ClientShellOverlayKind::ConfirmProjectDelete,
             Self::Help(_) => ClientShellOverlayKind::Help,
             Self::Navigator(_) => ClientShellOverlayKind::Navigator,
             Self::WorktreeCreate(_) => ClientShellOverlayKind::WorktreeCreate,
@@ -920,6 +938,7 @@ pub(crate) struct ClientShellState {
     /// Workspace ids whose agents the grouped agent panel hides under their header.
     pub(super) collapsed_agent_groups: HashSet<String>,
     pub(super) collapsed_sidebar_sections: std::collections::BTreeSet<crate::ui::SidebarSection>,
+    pub(super) projects: super::projects::ClientProjectsState,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) pending_agent_reveal: Option<(ClientEndpointId, String)>,
@@ -1101,6 +1120,7 @@ impl ClientShellState {
                 .iter()
                 .filter_map(|name| crate::ui::SidebarSection::from_name(name))
                 .collect(),
+            projects: Default::default(),
             workspace_scroll: 0,
             agent_scroll: 0,
             pending_agent_reveal: None,
