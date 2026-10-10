@@ -1085,6 +1085,12 @@
           "description": "Complete Agent-row overrides keyed by strict canonical agent id. Agents without an override use ui.sidebar.agents.rows."
         },
         {
+          "key": "ui.sidebar.projects.enabled",
+          "type": "boolean",
+          "default": "true",
+          "description": "Show the projects section (named herdr sessions) above Spaces in the single-machine sidebar. Click a project to suspend the current session and open it; use new to create one."
+        },
+        {
           "key": "ui.sidebar.spaces.row_gap",
           "type": "integer",
           "default": "0",

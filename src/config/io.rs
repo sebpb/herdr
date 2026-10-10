@@ -939,6 +939,20 @@ delivery = "herdr"
     }
 
     #[test]
+    fn load_live_config_accepts_the_projects_sidebar_section() {
+        let loaded = load_live_config_from_str(
+            r##"
+[ui.sidebar.projects]
+enabled = false
+"##,
+        )
+        .unwrap();
+
+        assert!(loaded.diagnostics.is_empty(), "{:?}", loaded.diagnostics);
+        assert!(!loaded.config.ui.sidebar.projects.enabled);
+    }
+
+    #[test]
     fn load_live_config_warns_about_unknown_keys_and_applies_known_siblings() {
         let loaded = load_live_config_from_str(
             r##"

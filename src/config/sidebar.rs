@@ -478,11 +478,25 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
+/// The projects section lists the named herdr sessions above the spaces.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct ProjectsSidebarConfig {
+    pub enabled: bool,
+}
+
+impl Default for ProjectsSidebarConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    pub projects: ProjectsSidebarConfig,
 }
 
 #[cfg(test)]
@@ -514,6 +528,13 @@ mod tests {
             ]
         );
         assert_eq!(config.spaces.row_gap, 0);
+        assert!(config.projects.enabled);
+    }
+
+    #[test]
+    fn projects_section_can_be_disabled() {
+        let config: SidebarConfig = toml::from_str("[projects]\nenabled = false\n").unwrap();
+        assert!(!config.projects.enabled);
     }
 
     #[test]

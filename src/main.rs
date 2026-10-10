@@ -368,6 +368,10 @@ const DEFAULT_CONFIG: &str = r##"# herdr configuration
 # row_gap = 0
 # rows = [["state_icon", "workspace"], ["branch", "git_status"]]
 
+# Projects (named herdr sessions) listed above the spaces in the local sidebar.
+# [ui.sidebar.projects]
+# enabled = true
+
 # Background notification popup delivery
 [ui.toast]
 # off = disable pop-up notifications
