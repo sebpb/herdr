@@ -1,4 +1,5 @@
 use super::*;
+use crate::ui::SidebarSection;
 use ratatui::{
     text::Line,
     widgets::{Paragraph, Widget},
@@ -211,21 +212,161 @@ pub(crate) fn render_sidebar(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    let sections = sidebar_sections(area, state, hits);
+    let (workspace_area, detail_area) = (sections.spaces, sections.agents);
+    let spaces_collapsed = state
+        .collapsed_sidebar_sections
+        .contains(&SidebarSection::Spaces);
+    render_section_title(
+        buffer,
+        workspace_area,
+        SidebarSection::Spaces,
+        "spaces",
+        spaces_collapsed,
+        palette,
+        hits,
+    );
+    if spaces_collapsed {
+        render_global_launcher(
+            buffer,
+            workspace_area,
+            workspace_area.y,
+            snapshot,
+            config,
+            hits,
+        );
+    } else {
+        render_spaces_body(buffer, workspace_area, snapshot, config, state, hits);
+    }
+
+    if state
+        .collapsed_sidebar_sections
+        .contains(&SidebarSection::Agents)
+    {
+        render_collapsed_agent_header(buffer, detail_area, config, hits);
+    } else {
+        super::render_agent_panel(
+            buffer,
+            detail_area,
+            snapshot,
+            config,
+            state.agent_scroll,
+            state.dragged_agent_pane_id,
+            state.agent_drop_indicator_row,
+            state.collapsed_agent_groups,
+            hits,
+        );
+    }
+
+    hits.sidebar_toggle = Rect::new(
+        area.right().saturating_sub(2),
+        area.bottom().saturating_sub(1),
+        u16::from(area.width > 1),
+        u16::from(area.height > 0),
+    );
     put_text(
         buffer,
-        workspace_area.x,
-        workspace_area.y,
-        workspace_area.width,
-        " spaces",
+        hits.sidebar_toggle.x,
+        hits.sidebar_toggle.y,
+        hits.sidebar_toggle.width,
+        "«",
+        Style::default().fg(palette.overlay0),
+    );
+}
+
+/// Lays out the expanded sidebar sections and records the section divider hits.
+pub(in crate::client::shell) fn sidebar_sections(
+    area: Rect,
+    state: &ShellRenderState<'_>,
+    hits: &mut ShellHitMap,
+) -> crate::ui::SidebarSectionRects {
+    let sections = crate::ui::sidebar_section_rects(
+        area,
+        state.sidebar_section_split,
+        state.collapsed_sidebar_sections,
+        0,
+    );
+    hits.sidebar_section_divider = sections.divider.unwrap_or_default();
+    hits.sidebar_section_split_area = sections.split_area;
+    sections
+}
+
+/// Draws a section title on the first row of `area` and records its hit. Collapsed titles
+/// gain a `▸` marker; expanded titles keep the plain look.
+pub(in crate::client::shell) fn render_section_title(
+    buffer: &mut Buffer,
+    area: Rect,
+    section: SidebarSection,
+    label: &str,
+    collapsed: bool,
+    palette: &Palette,
+    hits: &mut ShellHitMap,
+) {
+    if area.is_empty() {
+        return;
+    }
+    let rect = Rect::new(area.x, area.y, area.width, 1);
+    let title = if collapsed {
+        format!("▸ {label}")
+    } else {
+        format!(" {label}")
+    };
+    put_text(
+        buffer,
+        rect.x,
+        rect.y,
+        rect.width,
+        &title,
         Style::default()
             .fg(palette.overlay0)
             .add_modifier(Modifier::BOLD),
     );
+    hits.section_titles.push((rect, section));
+}
 
+/// A collapsed agents section: the `─` rule and the `▸ agents` title, without the sort toggle.
+pub(in crate::client::shell) fn render_collapsed_agent_header(
+    buffer: &mut Buffer,
+    area: Rect,
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) {
+    if area.is_empty() {
+        return;
+    }
+    put_text(
+        buffer,
+        area.x,
+        area.y,
+        area.width,
+        &"─".repeat(area.width as usize),
+        Style::default().fg(config.palette.surface_dim),
+    );
+    render_section_title(
+        buffer,
+        Rect::new(
+            area.x,
+            area.y + 1,
+            area.width,
+            area.height.saturating_sub(1),
+        ),
+        SidebarSection::Agents,
+        "agents",
+        true,
+        &config.palette,
+        hits,
+    );
+}
+
+fn render_spaces_body(
+    buffer: &mut Buffer,
+    workspace_area: Rect,
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    state: &mut ShellRenderState<'_>,
+    hits: &mut ShellHitMap,
+) {
+    let palette = &config.palette;
     let entries = workspace_entries(snapshot, state.collapsed_groups);
     let body = Rect::new(
         workspace_area.x,
@@ -391,6 +532,21 @@ pub(crate) fn render_sidebar(
             " new",
             Style::default().fg(palette.overlay0),
         );
+    }
+    render_global_launcher(buffer, workspace_area, footer_y, snapshot, config, hits);
+}
+
+/// The right-aligned global `menu` launcher on row `y` of the spaces section.
+fn render_global_launcher(
+    buffer: &mut Buffer,
+    workspace_area: Rect,
+    footer_y: u16,
+    snapshot: &ClientShellSnapshot,
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) {
+    let palette = &config.palette;
+    if config.mouse_capture && !workspace_area.is_empty() {
         let attention = super::super::global_menu::global_menu_attention(snapshot);
         let launcher_width = if attention { 8 } else { 6 }.min(workspace_area.width);
         hits.global_launcher = Rect::new(
@@ -429,33 +585,6 @@ pub(crate) fn render_sidebar(
             );
         }
     }
-
-    super::render_agent_panel(
-        buffer,
-        detail_area,
-        snapshot,
-        config,
-        state.agent_scroll,
-        state.dragged_agent_pane_id,
-        state.agent_drop_indicator_row,
-        state.collapsed_agent_groups,
-        hits,
-    );
-
-    hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
-        area.bottom().saturating_sub(1),
-        u16::from(area.width > 1),
-        u16::from(area.height > 0),
-    );
-    put_text(
-        buffer,
-        hits.sidebar_toggle.x,
-        hits.sidebar_toggle.y,
-        hits.sidebar_toggle.width,
-        "«",
-        Style::default().fg(palette.overlay0),
-    );
 }
 
 pub(crate) fn workspace_entries(

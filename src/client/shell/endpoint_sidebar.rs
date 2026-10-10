@@ -249,21 +249,74 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
-    let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
-    hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+    let sections = super::sidebar::sidebar_sections(area, state, hits);
+    let (workspace_area, detail_area) = (sections.spaces, sections.agents);
+    let machines_collapsed = state
+        .collapsed_sidebar_sections
+        .contains(&crate::ui::SidebarSection::Spaces);
+    super::sidebar::render_section_title(
+        buffer,
+        workspace_area,
+        crate::ui::SidebarSection::Spaces,
+        "machines",
+        machines_collapsed,
+        palette,
+        hits,
+    );
+    if machines_collapsed {
+        render_endpoint_launcher(
+            buffer,
+            workspace_area,
+            workspace_area.y,
+            active_snapshot,
+            config,
+            hits,
+        );
+    } else {
+        render_machines_body(buffer, workspace_area, active_snapshot, config, state, hits);
+    }
+    if state
+        .collapsed_sidebar_sections
+        .contains(&crate::ui::SidebarSection::Agents)
+    {
+        super::sidebar::render_collapsed_agent_header(buffer, detail_area, config, hits);
+    } else {
+        super::endpoint_agents::render_expanded(
+            buffer,
+            detail_area,
+            active_snapshot.and_then(|snapshot| snapshot.agent_view_label.as_deref()),
+            state.endpoints,
+            state.active_endpoint_id,
+            config,
+            state.agent_scroll,
+            hits,
+        );
+    }
+    hits.sidebar_toggle = Rect::new(
+        area.right().saturating_sub(2),
+        area.bottom().saturating_sub(1),
+        u16::from(area.width > 1),
+        u16::from(area.height > 0),
+    );
     put_text(
         buffer,
-        workspace_area.x,
-        workspace_area.y,
-        workspace_area.width,
-        " machines",
-        Style::default()
-            .fg(palette.overlay0)
-            .add_modifier(Modifier::BOLD),
+        hits.sidebar_toggle.x,
+        hits.sidebar_toggle.y,
+        hits.sidebar_toggle.width,
+        "«",
+        Style::default().fg(palette.overlay0),
     );
+}
 
+fn render_machines_body(
+    buffer: &mut Buffer,
+    workspace_area: Rect,
+    active_snapshot: Option<&ClientShellSnapshot>,
+    config: &ClientShellConfig,
+    state: &mut ShellRenderState<'_>,
+    hits: &mut ShellHitMap,
+) {
+    let palette = &config.palette;
     let empty_collapsed_groups = HashSet::new();
 
     enum Row {
@@ -533,6 +586,28 @@ pub(super) fn render_expanded(
             &label,
             Style::default().fg(palette.overlay0),
         );
+    }
+    render_endpoint_launcher(
+        buffer,
+        workspace_area,
+        footer_y,
+        active_snapshot,
+        config,
+        hits,
+    );
+}
+
+/// The right-aligned global `menu` launcher on row `footer_y` of the machines section.
+fn render_endpoint_launcher(
+    buffer: &mut Buffer,
+    workspace_area: Rect,
+    footer_y: u16,
+    active_snapshot: Option<&ClientShellSnapshot>,
+    config: &ClientShellConfig,
+    hits: &mut ShellHitMap,
+) {
+    let palette = &config.palette;
+    if config.mouse_capture && !workspace_area.is_empty() {
         let attention = active_snapshot.is_some_and(super::global_menu::global_menu_attention);
         let width = if attention { 8 } else { 6 }.min(workspace_area.width);
         hits.global_launcher = Rect::new(
@@ -553,30 +628,6 @@ pub(super) fn render_expanded(
             }),
         );
     }
-    super::endpoint_agents::render_expanded(
-        buffer,
-        detail_area,
-        active_snapshot.and_then(|snapshot| snapshot.agent_view_label.as_deref()),
-        state.endpoints,
-        state.active_endpoint_id,
-        config,
-        state.agent_scroll,
-        hits,
-    );
-    hits.sidebar_toggle = Rect::new(
-        area.right().saturating_sub(2),
-        area.bottom().saturating_sub(1),
-        u16::from(area.width > 1),
-        u16::from(area.height > 0),
-    );
-    put_text(
-        buffer,
-        hits.sidebar_toggle.x,
-        hits.sidebar_toggle.y,
-        hits.sidebar_toggle.width,
-        "«",
-        Style::default().fg(palette.overlay0),
-    );
 }
 
 fn active_endpoint_label<'a>(state: &'a ShellRenderState<'_>) -> &'a str {

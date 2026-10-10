@@ -367,21 +367,20 @@ pub(super) fn render_agent_panel_header(
     if area.height < 2 {
         return false;
     }
-    put_text(
-        buffer,
-        area.x,
-        area.y + 1,
-        area.width,
-        " agents",
-        Style::default()
-            .fg(config.palette.overlay0)
-            .add_modifier(Modifier::BOLD),
-    );
     let sort_label = agent_view_label.unwrap_or(match config.agent_panel_sort {
         crate::config::AgentPanelSortConfig::Spaces => "grouped",
         crate::config::AgentPanelSortConfig::Priority => "priority",
     });
     let sort_width = display_width(sort_label).min(area.width as usize) as u16;
+    super::sidebar::render_section_title(
+        buffer,
+        Rect::new(area.x, area.y + 1, area.width.saturating_sub(sort_width), 1),
+        crate::ui::SidebarSection::Agents,
+        "agents",
+        false,
+        &config.palette,
+        hits,
+    );
     let sort_rect = Rect::new(
         area.right().saturating_sub(sort_width),
         area.y + 1,

@@ -103,6 +103,8 @@ pub(super) struct ShellHitMap {
     pub(super) agent_sort_toggle: Rect,
     pub(super) sidebar_divider: Rect,
     pub(super) sidebar_section_divider: Rect,
+    pub(super) sidebar_section_split_area: Rect,
+    pub(super) section_titles: Vec<(Rect, crate::ui::SidebarSection)>,
     pub(super) sidebar_toggle: Rect,
     pub(super) new_workspace: Rect,
     pub(super) new_tab: Rect,
@@ -910,6 +912,7 @@ pub(crate) struct ClientShellState {
     pub(super) remote_collapsed_groups: HashMap<ClientEndpointId, HashSet<String>>,
     /// Workspace ids whose agents the grouped agent panel hides under their header.
     pub(super) collapsed_agent_groups: HashSet<String>,
+    pub(super) collapsed_sidebar_sections: std::collections::BTreeSet<crate::ui::SidebarSection>,
     pub(super) workspace_scroll: usize,
     pub(super) agent_scroll: usize,
     pub(super) pending_agent_reveal: Option<(ClientEndpointId, String)>,
@@ -1086,6 +1089,11 @@ impl ClientShellState {
             collapsed_groups: preferences.collapsed_groups.into_iter().collect(),
             remote_collapsed_groups,
             collapsed_agent_groups: preferences.collapsed_agent_groups.into_iter().collect(),
+            collapsed_sidebar_sections: preferences
+                .collapsed_sidebar_sections
+                .iter()
+                .filter_map(|name| crate::ui::SidebarSection::from_name(name))
+                .collect(),
             workspace_scroll: 0,
             agent_scroll: 0,
             pending_agent_reveal: None,

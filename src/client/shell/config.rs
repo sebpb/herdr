@@ -81,6 +81,11 @@ impl ClientShellState {
             collapsed_groups,
             remote_collapsed_groups,
             collapsed_agent_groups,
+            collapsed_sidebar_sections: self
+                .collapsed_sidebar_sections
+                .iter()
+                .map(|section| section.name().to_owned())
+                .collect(),
         };
         if let Err(error) = preferences::store(path, preferences) {
             self.set_endpoint_error(error);

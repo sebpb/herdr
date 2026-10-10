@@ -22,7 +22,7 @@ impl ClientShellState {
     }
 
     fn set_sidebar_section_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
-        let divider = self.hits.sidebar_divider;
+        let divider = self.hits.sidebar_section_split_area;
         if divider.height == 0 {
             return;
         }
@@ -33,6 +33,21 @@ impl ClientShellState {
             self.sidebar_section_split_manual = true;
             outcome.repaint = true;
         }
+    }
+
+    fn toggle_sidebar_section(
+        &mut self,
+        section: crate::ui::SidebarSection,
+        outcome: &mut ClientShellInput,
+    ) {
+        if !self.collapsed_sidebar_sections.remove(&section) {
+            self.collapsed_sidebar_sections.insert(section);
+        } else if section == crate::ui::SidebarSection::Spaces {
+            self.reveal_focused_workspace = true;
+        }
+        self.chrome_drag = None;
+        outcome.repaint = true;
+        self.persist_chrome_preferences(outcome);
     }
 
     fn pane_scrollbar_offset(
@@ -2230,6 +2245,17 @@ impl ClientShellState {
                 if super::contains(self.hits.global_launcher, point) {
                     self.toggle_global_menu();
                     outcome.repaint = true;
+                    return;
+                }
+                let section_title = self
+                    .hits
+                    .section_titles
+                    .iter()
+                    .find(|(rect, _)| super::contains(*rect, point))
+                    .map(|(_, section)| *section)
+                    .filter(|_| !super::contains(self.hits.sidebar_toggle, point));
+                if let Some(section) = section_title {
+                    self.toggle_sidebar_section(section, outcome);
                     return;
                 }
                 if super::contains(self.hits.new_workspace, point) {
