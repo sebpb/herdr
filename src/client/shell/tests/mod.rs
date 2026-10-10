@@ -261,5 +261,6 @@ mod link_hover;
 mod mobile;
 mod mouse_selection;
 mod popup_focus_projection;
+mod session_switch;
 mod sidebar_sections;
 mod startup_overlays;

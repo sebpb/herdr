@@ -31,6 +31,7 @@ mod image_files;
 mod input;
 mod loop_config;
 mod notifications;
+mod session_switch;
 mod shell;
 mod shell_runtime;
 mod startup;
@@ -490,6 +491,7 @@ async fn run_client_loop(
         deferred_local_activation: None,
         draw_host_cursor,
         detached_process_children: Vec::new(),
+        session_switch: Default::default(),
         shell: config.shell_config.map(shell::ClientShellState::new),
     };
     let mut federated = endpoint_catalog.has_enabled_ssh();
@@ -539,6 +541,7 @@ async fn run_client_loop(
     let stdin_tx = event_tx.clone();
 
     let mut endpoint_commands = endpoint_commands::EndpointCommands::default();
+    state.session_switch = session_switch::SessionSwitchRuntime::new(event_tx.clone());
 
     // Spawn the stdin reader thread.
     let will_query_host_terminal_theme = state.attach_escape.is_none();
@@ -1374,6 +1377,9 @@ async fn run_client_loop(
                         shell.compose(state.reported_size.0, state.reported_size.1)
                     });
                     let reader_quit = writer.stop_handle();
+                    if endpoint_id.is_local() {
+                        state.session_switch.local_connected();
+                    }
                     #[cfg(unix)]
                     state.start_endpoint_graphics_generation(&endpoint_id, generation);
                     write_stream.insert(
@@ -1778,7 +1784,10 @@ async fn run_client_loop(
                         unreachable!("retirements are handled before presentation gating")
                     }
                     ServerMessage::ServerShutdown { reason } => {
-                        if !federated && endpoint_id.is_local() {
+                        if !federated
+                            && !state.session_switch.keeps_local_alive()
+                            && endpoint_id.is_local()
+                        {
                             return Err(ClientError::ServerShutdown { reason });
                         }
                         write_stream.fail(
@@ -1945,6 +1954,7 @@ async fn run_client_loop(
                             &mut write_stream,
                             state.shell.as_mut(),
                             &mut state.detached_process_children,
+                            &mut state.session_switch,
                             &mut scheduled_activation,
                         )?;
                         let repaint = repaint || dispatch_repaint;
@@ -2218,6 +2228,97 @@ async fn run_client_loop(
                     }
                 }
             }
+            ClientLoopEvent::SessionSwitchWarnings { request, warnings } => {
+                state.session_switch.finish_check();
+                let Some(shell) = state.shell.as_mut() else {
+                    continue;
+                };
+                let outcome = shell.receive_session_switch_warnings(request, warnings);
+                let frame = outcome
+                    .repaint
+                    .then(|| shell.compose(state.reported_size.0, state.reported_size.1))
+                    .flatten();
+                if finish_client_shell_input(
+                    &mut state,
+                    outcome,
+                    frame,
+                    &mut write_stream,
+                    &mut pending_activation,
+                    &mut endpoint_commands,
+                    &mut prefix_input_source,
+                    &mut scheduled_activation,
+                )? {
+                    return Ok(());
+                }
+            }
+            ClientLoopEvent::SessionSwitchPrepared { request, result } => {
+                let result =
+                    result.and_then(|()| crate::session::set_active(request.target.as_deref()));
+                let local = endpoint::ClientEndpointId::Local;
+                let notice = match &result {
+                    Ok(()) => {
+                        if let Err(error) =
+                            crate::session::store_last_session(request.target.as_deref())
+                        {
+                            warn!(%error, "failed to record the last session");
+                        }
+                        format!("Opening {}…", request.target_label())
+                    }
+                    Err(error) => {
+                        warn!(target = request.target_label(), %error, "session switch failed");
+                        format!("Could not switch to {}: {error}", request.target_label())
+                    }
+                };
+                // The suspended session's connection, if still open, must not be reused.
+                if result.is_ok() {
+                    if let Some(generation) = write_stream
+                        .connection(&local)
+                        .map(|connection| connection.generation)
+                    {
+                        write_stream.disconnect(&local);
+                        if handle_endpoint_disconnect(
+                            &mut state,
+                            &mut write_stream,
+                            &mut endpoint_commands,
+                            &mut supervisors,
+                            &mut pending_activation,
+                            &local,
+                            generation,
+                            now,
+                            "is switching sessions",
+                        ) {
+                            clear_endpoint_host_effects(
+                                &mut state,
+                                &host_mouse_capture_active,
+                                &host_sgr_pixels_active,
+                            );
+                        }
+                    }
+                }
+                // Re-target Local at the active session (the new one, or the current one
+                // after a failed switch that already dropped its connection).
+                let socket_path = client_socket_path();
+                if result.is_ok() || write_stream.connection(&local).is_none() {
+                    supervisors.add_local(socket_path.clone(), None, now);
+                    state.deferred_local_activation = Some(endpoint::EndpointActivationIntent {
+                        endpoint_id: local,
+                        target: None,
+                    });
+                    state.session_switch.await_local_connection();
+                } else {
+                    state.session_switch.fail();
+                }
+                if let Some(shell) = state.shell.as_mut() {
+                    if result.is_ok() {
+                        shell.reload_local_preferences(&socket_path);
+                    }
+                    shell.show_session_switch_notice(notice);
+                    if let Some(frame) = shell.compose(state.reported_size.0, state.reported_size.1)
+                    {
+                        state.present_frozen_chrome(frame);
+                    }
+                }
+            }
             ClientLoopEvent::ServerDisconnected {
                 endpoint_id,
                 generation,
@@ -2251,12 +2352,19 @@ async fn run_client_loop(
                         error = %failure.message,
                         "endpoint transport failed"
                     );
-                    if !federated && failure.endpoint_id.is_local() {
+                    let switching_session =
+                        failure.endpoint_id.is_local() && state.session_switch.keeps_local_alive();
+                    if !federated && !switching_session && failure.endpoint_id.is_local() {
                         return Err(ClientError::ConnectionLost(io::Error::new(
                             failure.kind,
                             failure.message,
                         )));
                     }
+                    let notice = if switching_session {
+                        "is switching sessions".to_owned()
+                    } else {
+                        format!("{}; reconnecting", failure.message)
+                    };
                     if handle_endpoint_disconnect(
                         &mut state,
                         &mut write_stream,
@@ -2266,7 +2374,7 @@ async fn run_client_loop(
                         &failure.endpoint_id,
                         failure.generation,
                         now,
-                        &format!("{}; reconnecting", failure.message),
+                        &notice,
                     ) {
                         clear_endpoint_host_effects(
                             &mut state,

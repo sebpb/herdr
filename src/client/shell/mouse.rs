@@ -1895,6 +1895,9 @@ impl ClientShellState {
                     Some(ClientShellOverlay::ConfirmClose(_)) => {
                         self.accept_close_confirmation(outcome);
                     }
+                    Some(ClientShellOverlay::ConfirmSessionSwitch(_)) => {
+                        self.accept_session_switch_confirmation(outcome);
+                    }
                     _ => {}
                 }
             } else if super::contains(self.hits.overlay_clear, point) {

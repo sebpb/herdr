@@ -30,6 +30,7 @@ mod overlay_input;
 mod preferences;
 mod render;
 mod scroll;
+mod session_switch;
 mod settings;
 mod state;
 mod surface_patch;
@@ -40,6 +41,7 @@ use text_editor::TextEditor;
 use word_selection::ClientWordSelection;
 
 pub(in crate::client::shell) use render::sidebar;
+pub(crate) use session_switch::{ClientSessionSwitchConfirmOverlay, SessionSwitchRequest};
 pub(crate) use state::*;
 #[cfg(test)]
 pub(super) use surface_patch::apply_composed_surface_patch;

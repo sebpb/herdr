@@ -281,6 +281,10 @@ pub(crate) enum ClientShellAction {
     },
     ReplayMouse(Vec<crossterm::event::MouseEvent>),
     Keybind(crate::input::KeybindAction),
+    /// Check the current session for work a suspend would lose, then switch or confirm.
+    RequestSessionSwitch(SessionSwitchRequest),
+    /// Suspend the current session and move Local to the requested one.
+    SwitchSession(SessionSwitchRequest),
 }
 
 #[derive(Default)]
@@ -310,6 +314,7 @@ pub(super) enum ClientShellOverlayKind {
     ReleaseNotes,
     Rename,
     ConfirmClose,
+    ConfirmSessionSwitch,
     Help,
     Navigator,
     WorktreeCreate,
@@ -613,6 +618,7 @@ pub(super) enum ClientShellOverlay {
     ReleaseNotes(crate::app::state::ReleaseNotesState),
     Rename(ClientRenameOverlay),
     ConfirmClose(ClientConfirmCloseOverlay),
+    ConfirmSessionSwitch(ClientSessionSwitchConfirmOverlay),
     Help(ClientHelpOverlay),
     Navigator(ClientNavigatorOverlay),
     WorktreeCreate(ClientWorktreeCreateOverlay),
@@ -631,6 +637,7 @@ impl ClientShellOverlay {
             Self::ReleaseNotes(_) => ClientShellOverlayKind::ReleaseNotes,
             Self::Rename(_) => ClientShellOverlayKind::Rename,
             Self::ConfirmClose(_) => ClientShellOverlayKind::ConfirmClose,
+            Self::ConfirmSessionSwitch(_) => ClientShellOverlayKind::ConfirmSessionSwitch,
             Self::Help(_) => ClientShellOverlayKind::Help,
             Self::Navigator(_) => ClientShellOverlayKind::Navigator,
             Self::WorktreeCreate(_) => ClientShellOverlayKind::WorktreeCreate,

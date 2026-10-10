@@ -882,6 +882,18 @@ impl ClientShellState {
             return;
         }
 
+        if matches!(
+            self.overlay,
+            Some(ClientShellOverlay::ConfirmSessionSwitch(_))
+        ) {
+            match key.code {
+                KeyCode::Enter => self.accept_session_switch_confirmation(outcome),
+                KeyCode::Esc => self.cancel_session_switch_confirmation(outcome),
+                _ => {}
+            }
+            return;
+        }
+
         if matches!(self.overlay, Some(ClientShellOverlay::ConfirmClose(_))) {
             if key.code == KeyCode::Enter {
                 self.accept_close_confirmation(outcome);

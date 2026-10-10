@@ -1,5 +1,6 @@
 use super::*;
 
+mod session_switch_overlay;
 mod settings_overlay;
 mod worktree_overlays;
 
@@ -63,6 +64,9 @@ pub(crate) fn render_client_overlay(
         }
         ClientShellOverlay::Rename(v) => render_rename_overlay(b, v, p),
         ClientShellOverlay::ConfirmClose(v) => render_confirm_close_overlay(b, v, p),
+        ClientShellOverlay::ConfirmSessionSwitch(v) => {
+            session_switch_overlay::render_session_switch_confirm_overlay(b, v, p)
+        }
         ClientShellOverlay::Help(v) => render_help_overlay(b, v, k, p),
         ClientShellOverlay::Navigator(v) => {
             render_navigator_overlay(b, v, endpoints, active_endpoint_id, p)

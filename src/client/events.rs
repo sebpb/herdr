@@ -32,5 +32,15 @@ pub(super) enum ClientLoopEvent {
         /// latest target have the same identity after restoration.
         force: bool,
     },
+    /// The current session's pre-suspend check for a requested session switch.
+    SessionSwitchWarnings {
+        request: shell::SessionSwitchRequest,
+        warnings: Result<Vec<String>, String>,
+    },
+    /// The target session is running and the current one is suspended (or the error).
+    SessionSwitchPrepared {
+        request: shell::SessionSwitchRequest,
+        result: Result<(), String>,
+    },
     Timer,
 }
