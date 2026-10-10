@@ -102,6 +102,81 @@ pub fn active_name() -> Option<String> {
         .filter(|name| validate_name(name).is_ok())
 }
 
+/// Makes `name` the active session for the rest of this process.
+///
+/// `None` (or `"default"`) selects the default session. Like an explicit
+/// `--session`, this marks the selection explicit and clears inherited socket
+/// overrides so every derived path follows the new session.
+pub fn set_active(name: Option<&str>) -> Result<(), String> {
+    let session = match name {
+        Some(name) => normalize_name(name)?,
+        None => None,
+    };
+    match session {
+        Some(session) => std::env::set_var(SESSION_ENV_VAR, session),
+        None => std::env::remove_var(SESSION_ENV_VAR),
+    }
+    std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    std::env::remove_var(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+    EXPLICIT_SESSION_REQUESTED.store(true, Ordering::Relaxed);
+    Ok(())
+}
+
+/// User-facing name of a session selection (`None` is the default session).
+pub fn display_name(name: Option<&str>) -> &str {
+    name.unwrap_or(DEFAULT_SESSION_NAME)
+}
+
+/// User-facing name of the active session.
+pub fn active_display_name() -> String {
+    display_name(active_name().as_deref()).to_string()
+}
+
+fn last_session_path() -> PathBuf {
+    crate::config::state_dir()
+        .join("client")
+        .join("last-session")
+}
+
+/// Records the session a foreground client last switched to.
+pub fn store_last_session(name: Option<&str>) -> Result<(), String> {
+    let path = last_session_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
+    }
+    std::fs::write(&path, format!("{}\n", display_name(name))).map_err(|err| err.to_string())
+}
+
+/// The last session a foreground client switched to, when it is still valid.
+///
+/// The outer `None` means there is no usable record; `Some(None)` is the
+/// default session.
+pub fn load_last_session() -> Option<Option<String>> {
+    let content = std::fs::read_to_string(last_session_path()).ok()?;
+    let session = normalize_name(content.trim()).ok()?;
+    match session {
+        Some(name) if !data_dir_for(Some(&name)).is_dir() => None,
+        session => Some(session),
+    }
+}
+
+/// For a plain `herdr` launch with no session selection or socket override,
+/// reopen the session the client last switched to.
+pub fn apply_last_session_for_launch() {
+    if explicit_session_requested()
+        || std::env::var_os(SESSION_ENV_VAR).is_some()
+        || std::env::var_os(crate::api::SOCKET_PATH_ENV_VAR).is_some()
+        || std::env::var_os(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR).is_some()
+    {
+        return;
+    }
+    if let Some(Some(name)) = load_last_session() {
+        if let Err(err) = set_active(Some(&name)) {
+            tracing::warn!(%err, "ignoring last session");
+        }
+    }
+}
+
 pub fn local_attach_command() -> String {
     match active_name() {
         Some(name) => format!("herdr session attach {name}"),
@@ -251,6 +326,26 @@ pub(crate) fn stop_active_server() -> Result<(), String> {
         STOP_WAIT_TIMEOUT,
         "server",
     )
+}
+
+/// Stops the server answering on `api_socket_path`, waiting until both sockets
+/// are unreachable. Blocks for up to the graceful-stop timeout.
+pub(crate) fn stop_server_at(
+    api_socket_path: PathBuf,
+    client_socket_path: PathBuf,
+    label: &str,
+) -> Result<(), String> {
+    stop_socket_with_timeout(
+        api_socket_path.clone(),
+        vec![api_socket_path, client_socket_path],
+        STOP_WAIT_TIMEOUT,
+        label,
+    )
+}
+
+/// Whether a server answers on an API socket path.
+pub(crate) fn is_server_running_at(api_socket_path: &Path) -> bool {
+    is_running_at(api_socket_path)
 }
 
 fn stop_session_with_timeout(name: Option<&str>, timeout: Duration) -> Result<SessionInfo, String> {
@@ -1021,6 +1116,119 @@ mod tests {
         std::env::remove_var(SESSION_ENV_VAR);
         clear_explicit_session_for_test();
         std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+    }
+
+    #[test]
+    fn set_active_switches_derived_paths_and_clears_socket_overrides() {
+        let _guard = env_lock().lock().unwrap();
+        let config_home =
+            std::env::temp_dir().join(format!("herdr-session-set-active-{}", std::process::id()));
+        std::env::set_var("XDG_CONFIG_HOME", &config_home);
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+        std::env::set_var(
+            crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
+            "/tmp/inherited-client.sock",
+        );
+        clear_explicit_session_for_test();
+        let herdr_dir = config_home.join(crate::config::app_dir_name());
+
+        set_active(Some("work")).unwrap();
+
+        assert!(explicit_session_requested());
+        assert_eq!(active_name().as_deref(), Some("work"));
+        assert_eq!(active_display_name(), "work");
+        assert!(std::env::var_os(crate::api::SOCKET_PATH_ENV_VAR).is_none());
+        assert!(
+            std::env::var_os(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR).is_none()
+        );
+        let work_dir = herdr_dir.join("sessions").join("work");
+        assert_eq!(active_api_socket_path(), work_dir.join("herdr.sock"));
+        assert_eq!(
+            crate::server::socket_paths::client_socket_path(),
+            work_dir.join("herdr-client.sock")
+        );
+
+        set_active(Some("default")).unwrap();
+        assert_eq!(active_name(), None);
+        assert_eq!(active_display_name(), "default");
+        assert_eq!(active_api_socket_path(), herdr_dir.join("herdr.sock"));
+
+        set_active(Some("work")).unwrap();
+        set_active(None).unwrap();
+        assert_eq!(active_name(), None);
+        assert!(std::env::var_os(SESSION_ENV_VAR).is_none());
+        assert_eq!(
+            crate::server::socket_paths::client_socket_path(),
+            herdr_dir.join("herdr-client.sock")
+        );
+
+        assert!(set_active(Some("../escape")).is_err());
+        assert_eq!(active_name(), None);
+
+        std::env::remove_var("XDG_CONFIG_HOME");
+        clear_explicit_session_for_test();
+    }
+
+    #[test]
+    fn last_session_round_trips_and_ignores_missing_sessions() {
+        let _guard = env_lock().lock().unwrap();
+        let root = std::env::temp_dir().join(format!("herdr-session-last-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+        std::env::set_var("XDG_STATE_HOME", root.join("state"));
+
+        assert_eq!(load_last_session(), None);
+        store_last_session(None).unwrap();
+        assert_eq!(load_last_session(), Some(None));
+
+        store_last_session(Some("work")).unwrap();
+        // A session whose directory was deleted is not reopened.
+        assert_eq!(load_last_session(), None);
+        std::fs::create_dir_all(data_dir_for(Some("work"))).unwrap();
+        assert_eq!(load_last_session(), Some(Some("work".to_string())));
+
+        std::fs::write(last_session_path(), "../escape\n").unwrap();
+        assert_eq!(load_last_session(), None);
+
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_STATE_HOME");
+    }
+
+    #[test]
+    fn plain_launch_reopens_last_session_unless_a_session_is_selected() {
+        let _guard = env_lock().lock().unwrap();
+        let root =
+            std::env::temp_dir().join(format!("herdr-session-launch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var("XDG_CONFIG_HOME", root.join("config"));
+        std::env::set_var("XDG_STATE_HOME", root.join("state"));
+        std::env::remove_var(SESSION_ENV_VAR);
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::remove_var(crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+        clear_explicit_session_for_test();
+        std::fs::create_dir_all(data_dir_for(Some("work"))).unwrap();
+        store_last_session(Some("work")).unwrap();
+
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/override.sock");
+        apply_last_session_for_launch();
+        assert_eq!(active_name(), None);
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+
+        std::env::set_var(SESSION_ENV_VAR, "other");
+        apply_last_session_for_launch();
+        assert_eq!(active_name().as_deref(), Some("other"));
+        std::env::remove_var(SESSION_ENV_VAR);
+
+        apply_last_session_for_launch();
+        assert_eq!(active_name().as_deref(), Some("work"));
+        assert!(explicit_session_requested());
+
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::remove_var(SESSION_ENV_VAR);
+        std::env::remove_var("XDG_CONFIG_HOME");
+        std::env::remove_var("XDG_STATE_HOME");
+        clear_explicit_session_for_test();
     }
 
     #[test]

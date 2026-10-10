@@ -46,7 +46,7 @@ pub fn is_server_listening() -> io::Result<bool> {
 }
 
 /// Checks whether a herdr server is listening at a specific socket path.
-fn is_server_listening_at(socket_path: &Path) -> io::Result<bool> {
+pub(crate) fn is_server_listening_at(socket_path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
     {
         match crate::platform::probe_local_server(socket_path) {
@@ -248,6 +248,89 @@ fn build_server_daemon_command(exe: PathBuf) -> Command {
     }
 
     command
+}
+
+/// Spawns the server daemon for a specific session, independent of the
+/// session selected by this process's environment.
+///
+/// `cwd` seeds a brand-new session's first workspace (a restored session keeps
+/// its own layout) and becomes the daemon's working directory. Without it, the
+/// client's working directory is used, as for a plain launch.
+pub fn spawn_server_daemon_for(session: Option<&str>, cwd: Option<&Path>) -> io::Result<u32> {
+    let exe = std::env::current_exe().map_err(|err| {
+        io::Error::new(
+            err.kind(),
+            format!("failed to determine herdr executable path: {err}"),
+        )
+    })?;
+    if let Some(cwd) = cwd {
+        if !cwd.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("project directory does not exist: {}", cwd.display()),
+            ));
+        }
+    }
+
+    info!(exe = %exe.display(), session = ?session, "spawning session server daemon");
+    let mut command = build_session_server_daemon_command(exe, session, cwd)?;
+    let pid =
+        crate::platform::launch_server_daemon_command(&mut command).map_err(|err: io::Error| {
+            io::Error::new(err.kind(), format!("failed to spawn herdr server: {err}"))
+        })?;
+    info!(pid, "session server daemon spawned");
+    Ok(pid)
+}
+
+fn build_session_server_daemon_command(
+    exe: PathBuf,
+    session: Option<&str>,
+    cwd: Option<&Path>,
+) -> io::Result<Command> {
+    let session = match session {
+        Some(name) => crate::session::parse_target_name(name).map_err(io::Error::other)?,
+        None => None,
+    };
+    let mut command = Command::new(&exe);
+    command
+        .arg("server")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::platform::detach_server_daemon_command(&mut command);
+
+    match session {
+        Some(session) => {
+            command.env(crate::session::SESSION_ENV_VAR, session);
+        }
+        None => {
+            command.env_remove(crate::session::SESSION_ENV_VAR);
+        }
+    }
+    command
+        .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+        .env_remove(super::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR);
+
+    let startup_cwd = cwd
+        .map(Path::to_path_buf)
+        .or_else(|| std::env::current_dir().ok());
+    match startup_cwd {
+        Some(startup_cwd) => {
+            if cwd.is_some() {
+                command.current_dir(&startup_cwd);
+            }
+            command.env(STARTUP_CWD_ENV_VAR, startup_cwd);
+        }
+        None => {
+            command.env_remove(STARTUP_CWD_ENV_VAR);
+        }
+    }
+    Ok(command)
+}
+
+/// The time a freshly spawned server gets to accept client connections.
+pub(crate) fn server_ready_timeout() -> Duration {
+    SERVER_READY_TIMEOUT
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +557,76 @@ mod tests {
         assert!(envs.iter().any(|(key, value)| {
             *key == OsStr::new(STARTUP_CWD_ENV_VAR) && value == &Some(expected.as_os_str())
         }));
+    }
+
+    #[test]
+    fn session_server_daemon_command_sets_explicit_session_env_and_cwd() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(crate::api::SOCKET_PATH_ENV_VAR, "/tmp/inherited.sock");
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "inherited");
+        let cwd = std::env::temp_dir();
+        let command = build_session_server_daemon_command(
+            PathBuf::from("/tmp/herdr-test"),
+            Some("work"),
+            Some(&cwd),
+        )
+        .unwrap();
+        let envs: Vec<_> = command.get_envs().collect();
+
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            vec![OsStr::new("server")]
+        );
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(crate::session::SESSION_ENV_VAR)
+                && value == &Some(OsStr::new("work"))
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(crate::api::SOCKET_PATH_ENV_VAR) && value.is_none()
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new("HERDR_CLIENT_SOCKET_PATH") && value.is_none()
+        }));
+        assert!(envs.iter().any(|(key, value)| {
+            *key == OsStr::new(STARTUP_CWD_ENV_VAR) && value == &Some(cwd.as_os_str())
+        }));
+        assert_eq!(command.get_current_dir(), Some(cwd.as_path()));
+        std::env::remove_var(crate::api::SOCKET_PATH_ENV_VAR);
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    }
+
+    #[test]
+    fn session_server_daemon_command_for_default_session_clears_session_env() {
+        let _guard = env_lock().lock().unwrap();
+        std::env::set_var(crate::session::SESSION_ENV_VAR, "inherited");
+        let expected = std::env::current_dir().unwrap();
+        for session in [None, Some("default")] {
+            let command = build_session_server_daemon_command(
+                PathBuf::from("/tmp/herdr-test"),
+                session,
+                None,
+            )
+            .unwrap();
+            let envs: Vec<_> = command.get_envs().collect();
+            assert!(envs.iter().any(|(key, value)| {
+                *key == OsStr::new(crate::session::SESSION_ENV_VAR) && value.is_none()
+            }));
+            assert!(envs.iter().any(|(key, value)| {
+                *key == OsStr::new(STARTUP_CWD_ENV_VAR) && value == &Some(expected.as_os_str())
+            }));
+            assert_eq!(command.get_current_dir(), None);
+        }
+        std::env::remove_var(crate::session::SESSION_ENV_VAR);
+    }
+
+    #[test]
+    fn session_server_daemon_command_rejects_invalid_session_names() {
+        assert!(build_session_server_daemon_command(
+            PathBuf::from("/tmp/herdr-test"),
+            Some("../escape"),
+            None
+        )
+        .is_err());
     }
 
     #[cfg(target_os = "linux")]

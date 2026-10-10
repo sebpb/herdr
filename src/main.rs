@@ -799,6 +799,8 @@ fn main() -> io::Result<()> {
 
     let loaded_config = config::Config::load();
     exit_if_nested_disabled(&loaded_config.config);
+    // A plain `herdr` reopens the session this client last switched to.
+    session::apply_last_session_for_launch();
 
     let saved_federation =
         client::endpoint::EndpointCatalog::load().is_ok_and(|catalog| catalog.has_enabled_ssh());
