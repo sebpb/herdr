@@ -282,6 +282,7 @@ mod tests {
             running,
             socket_path: String::new(),
             session_dir: format!("/sessions/{name}"),
+            connection_error: None,
         }
     }
 
